@@ -1,0 +1,17 @@
+services:
+  whisper:
+    build: .
+    image: faster-whisper-cuda
+    container_name: whisper
+    gpus: all
+    working_dir: /work/output
+    volumes:
+      - ../..:/work
+      - ./models:/models
+      - ./transcribe.py:/app/transcribe.py:ro
+      - ./whisper_common.py:/app/whisper_common.py:ro
+    environment:
+      AUDIO: ${AUDIO:-/work/input/audio16k_full.wav}
+      MODEL_DIR: /models
+      WHISPER_MODEL: ${WHISPER_MODEL:-large-v3-turbo}
+    command: python3 /app/transcribe.py

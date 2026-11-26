@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Secrets
+.env
+.env.*
+*.token
+*.key
+*.pem
+HF_TOKEN*
+
+# Logs
+*.log
+
+# Media
+*.wav
+*.webm
+*.mp3
+*.opus
+*.m4a
+*.mp4
+
+# Model binaries / caches
+**/models/
+*.tflite
+
+# Generated stage data
+1-ingest/output/*
+!1-ingest/output/.gitkeep
+2-transcribe/input/audio16k_full.wav
+2-transcribe/output/*
+!2-transcribe/output/.gitkeep
+!2-transcribe/output/audio/
+2-transcribe/output/audio/*
+!2-transcribe/output/audio/.gitkeep
+3-select/input/*
+!3-select/input/.gitkeep
+3-select/output/*
+!3-select/output/.gitkeep
+4-reframe/input/*
+!4-reframe/input/.gitkeep
+4-reframe/output/*
+!4-reframe/output/.gitkeep
+5-caption/input/*
+!5-caption/input/.gitkeep
+5-caption/output/*
+!5-caption/output/.gitkeep
+6-export/input/*
+!6-export/input/.gitkeep
+6-export/output/*
+!6-export/output/.gitkeep
+
+# Test artifacts
+2-transcribe/scripts/tests/sweep_*.json
+2-transcribe/scripts/tests/sweep_results.json
