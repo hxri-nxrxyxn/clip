@@ -11,7 +11,7 @@ if [[ -z "$RUN_ID" ]]; then
 fi
 shift
 
-OUT="$ROOT/app/history/$RUN_ID/targeted"
+OUT="$ROOT/2-transcribe/output/$RUN_ID/targeted"
 exec "$ROOT/.venv/bin/python" "$SCRIPT_DIR/targeted_prototype.py" \
     --run-id "$RUN_ID" \
     --out "$OUT" \

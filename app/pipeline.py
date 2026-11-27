@@ -17,6 +17,9 @@ ROOT = APP_DIR.parent
 RUNS_DIR = APP_DIR / "runs"
 HISTORY_DIR = APP_DIR / "history"
 CURRENT_JOB_PATH = APP_DIR / "current_job.json"
+INGEST_OUTPUT = ROOT / "1-ingest" / "output"
+CURRENT_RUN_POINTER = INGEST_OUTPUT / "current_run_id"
+STAGE_IDS = ["1-ingest", "2-transcribe", "3-select", "4-reframe", "5-caption", "6-export"]
 
 STAGES = {
     "1-ingest": {
@@ -154,8 +157,8 @@ def parse_iso(value):
         return None
 
 
-def current_since():
-    ingest = read_json("1-ingest/output/ingest.json") or {}
+def current_since(run_id=None):
+    ingest = ingest_for_run(run_id)
     return ingest.get("created_at")
 
 
@@ -195,9 +198,9 @@ def preview(relpath, kind, max_lines=40):
         return ""
 
 
-def summary(stage_id):
+def summary(stage_id, run_id=None):
     if stage_id == "1-ingest":
-        data = read_json("1-ingest/output/ingest.json")
+        data = ingest_for_run(run_id)
         if not data:
             return {}
         return {
@@ -206,6 +209,9 @@ def summary(stage_id):
             "source": Path(data.get("source_file", "")).name,
         }
     if stage_id == "2-transcribe":
+        run_id = resolve_run_id(run_id)
+        if run_id and stage_output_dir("2-transcribe", run_id).is_dir():
+            return transcribe_summary_from_path(stage_output_dir("2-transcribe", run_id))
         since = current_since()
 
         def current_json(relpath):
@@ -249,6 +255,52 @@ def current_job():
     return read_json_path(CURRENT_JOB_PATH)
 
 
+def stage_output_dir(stage_id, run_id):
+    return ROOT / stage_id / "output" / run_id
+
+
+def stage_input_dir(stage_id, run_id):
+    return ROOT / stage_id / "input" / run_id
+
+
+def write_current_run_pointer(run_id):
+    INGEST_OUTPUT.mkdir(parents=True, exist_ok=True)
+    CURRENT_RUN_POINTER.write_text(str(run_id), encoding="utf-8")
+    return run_id
+
+
+def read_current_run_pointer():
+    try:
+        value = CURRENT_RUN_POINTER.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def resolve_run_id(run_id=None):
+    if run_id:
+        return str(run_id)
+    marker = current_job() or {}
+    if marker.get("run_id"):
+        return marker["run_id"]
+    pointer = read_current_run_pointer()
+    if pointer:
+        return pointer
+    ingest = read_json("1-ingest/output/ingest.json") or {}
+    if ingest:
+        return run_id_for_ingest(ingest, media())
+    return None
+
+
+def ingest_for_run(run_id=None):
+    resolved = resolve_run_id(run_id)
+    if resolved:
+        data = read_json_path(stage_output_dir("1-ingest", resolved) / "ingest.json")
+        if data:
+            return data
+    return read_json("1-ingest/output/ingest.json") or {}
+
+
 def run_id_for_ingest(ingest, video=None):
     created = parse_iso(ingest.get("created_at")) or datetime.now(timezone.utc)
     video_id = (video or {}).get("video_id") or ingest.get("video_id") or "video"
@@ -256,9 +308,12 @@ def run_id_for_ingest(ingest, video=None):
 
 
 def current_run_id():
-    marker = current_job()
-    if marker:
-        return marker.get("run_id")
+    marker = current_job() or {}
+    if marker.get("run_id"):
+        return marker["run_id"]
+    pointer = read_current_run_pointer()
+    if pointer:
+        return pointer
     ingest = read_json("1-ingest/output/ingest.json") or {}
     if not ingest:
         return None
@@ -269,6 +324,8 @@ def current_run_id():
 
 
 def set_current_job(job_id, url, run_id=None):
+    if not run_id:
+        archive_current_run()
     record = {
         "job_id": job_id,
         "url": url,
@@ -278,6 +335,13 @@ def set_current_job(job_id, url, run_id=None):
     }
     with open(CURRENT_JOB_PATH, "w", encoding="utf-8") as fh:
         json.dump(record, fh, indent=1)
+    if run_id:
+        write_current_run_pointer(run_id)
+    else:
+        try:
+            CURRENT_RUN_POINTER.unlink()
+        except FileNotFoundError:
+            pass
     return record
 
 
@@ -288,6 +352,7 @@ def mark_current_run(run_id):
     record["run_id"] = run_id
     with open(CURRENT_JOB_PATH, "w", encoding="utf-8") as fh:
         json.dump(record, fh, indent=1)
+    write_current_run_pointer(run_id)
     return record
 
 
@@ -308,13 +373,18 @@ def clear_current_job():
         pass
 
 
-def media():
-    ingest = read_json("1-ingest/output/ingest.json") or {}
-    tag_info = file_info("2-transcribe/output/audio_tags.json")
-    if tag_info["exists"] and file_after(tag_info["mtime"], ingest.get("created_at")):
-        tags = read_json("2-transcribe/output/audio_tags.json") or {}
+def media(run_id=None):
+    run_id = resolve_run_id(run_id)
+    ingest = ingest_for_run(run_id)
+    if run_id:
+        tag_path = stage_output_dir("2-transcribe", run_id) / "audio_tags.json"
+        tags = read_json_path(tag_path) or {}
     else:
-        tags = {}
+        tag_info = file_info("2-transcribe/output/audio_tags.json")
+        if tag_info["exists"] and file_after(tag_info["mtime"], ingest.get("created_at")):
+            tags = read_json("2-transcribe/output/audio_tags.json") or {}
+        else:
+            tags = {}
     source = ingest.get("source_file") or ""
     url = ingest.get("webpage_url") or ingest.get("source_url") or ""
     title = ingest.get("title")
@@ -348,10 +418,18 @@ def clock(seconds):
 
 def activity(bin_seconds=10, base=None):
     if base is None:
-        base_path = ROOT / "2-transcribe" / "output"
-        info = file_info("2-transcribe/output/audio_tags.json")
-        if not info["exists"] or not file_after(info["mtime"], current_since()):
-            return None
+        run_id = resolve_run_id()
+        base_path = (
+            stage_output_dir("2-transcribe", run_id)
+            if run_id
+            else ROOT / "2-transcribe" / "output"
+        )
+        if not (base_path / "audio_tags.json").is_file():
+            legacy = ROOT / "2-transcribe" / "output"
+            info = file_info("2-transcribe/output/audio_tags.json")
+            if not info["exists"] or not file_after(info["mtime"], current_since()):
+                return None
+            base_path = legacy
     else:
         base_path = Path(base)
     meta = read_json_path(base_path / "audio_tags.json")
@@ -523,26 +601,30 @@ def activity(bin_seconds=10, base=None):
     }
 
 
-def outputs(stage_id, since=None):
+def outputs(stage_id, since=None, run_id=None):
+    run_id = resolve_run_id(run_id)
+    base = Path(stage_id) / "output"
+    source = base / run_id if run_id and (ROOT / base / run_id).is_dir() else base
     items = []
-    for item in scan(f"{stage_id}/output"):
+    for item in scan(source.as_posix()):
         if since and not file_after(item["mtime"], since):
             continue
-        relative = Path(item["path"]).relative_to(Path(stage_id) / "output")
+        relative = Path(item["path"]).relative_to(base)
+        if relative.parts and relative.parts[0] == TARGETED_DIR:
+            continue
         item["url"] = f"/files/{stage_id}/{relative.as_posix()}"
         items.append(item)
     return items
 
 
-def inputs(stage_id, stage):
-    items = scan(f"{stage_id}/input")
-    present = {item["path"] for item in items}
-    for required in stage["required"]:
-        if required not in present:
-            items.append(file_info(required))
-    required = set(stage["required"])
+def inputs(stage_id, stage, run_id=None):
+    run_id = resolve_run_id(run_id)
+    base = Path(stage_id) / "input"
+    source = base / run_id if run_id and (ROOT / base / run_id).is_dir() else base
+    items = scan(source.as_posix())
+    required_names = {Path(item).name for item in stage["required"]}
     for item in items:
-        item["required"] = item["path"] in required
+        item["required"] = Path(item["path"]).name in required_names
     return items
 
 
@@ -595,32 +677,39 @@ def detail(stage_id, stage, job=None):
     return data
 
 
-def archive_current_run():
-    marker = current_job() or {}
-    marker_run = marker.get("run_id")
-    if marker_run and (HISTORY_DIR / marker_run / "run.json").is_file():
-        return marker_run
-    ingest = read_json("1-ingest/output/ingest.json") or {}
+def archive_current_run(run_id=None):
+    if not run_id:
+        marker = current_job() or {}
+        marker_run = marker.get("run_id")
+        if marker_run and (HISTORY_DIR / marker_run / "run.json").is_file():
+            return marker_run
+    run_id = resolve_run_id(run_id)
+    if not run_id:
+        return None
+    if (HISTORY_DIR / run_id / "run.json").is_file():
+        return run_id
+    ingest = ingest_for_run(run_id)
     if not ingest:
         return None
     since = ingest.get("created_at")
-    current_outputs = outputs("2-transcribe", since)
+    current_outputs = outputs("2-transcribe", since, run_id=run_id)
     if not current_outputs:
         return None
-    media_data = media()
-    created = parse_iso(since) or datetime.now(timezone.utc)
-    run_id = f"{slug(media_data.get('video_id') or 'video')}-{created.strftime('%Y%m%d-%H%M%S')}"
+    media_data = media(run_id)
     destination = HISTORY_DIR / run_id
     temporary = HISTORY_DIR / f".{run_id}.tmp"
     if temporary.exists():
         shutil.rmtree(temporary)
     temporary.mkdir(parents=True, exist_ok=True)
-    sources = ["1-ingest/output/ingest.json"] + [item["path"] for item in current_outputs]
+    ingest_source = stage_output_dir("1-ingest", run_id) / "ingest.json"
+    if not ingest_source.is_file():
+        ingest_source = ROOT / "1-ingest" / "output" / "ingest.json"
+    source_paths = [ingest_source]
+    source_paths.extend(ROOT / item["path"] for item in current_outputs)
     files = []
     seen = set()
     skip_suffixes = {".wav", ".mp3", ".opus", ".webm", ".m4a", ".mp4"}
-    for relpath in sources:
-        source = ROOT / relpath
+    for source in source_paths:
         if not source.is_file() or source.name in seen:
             continue
         if source.suffix.lower() in skip_suffixes:
@@ -631,13 +720,15 @@ def archive_current_run():
         files.append(
             {
                 "name": source.name,
-                "source": relpath,
+                "source": source.relative_to(ROOT).as_posix(),
                 "size": target.stat().st_size,
                 "mtime": now_iso(target.stat().st_mtime),
             }
         )
     audio_name = None
     for candidate in (
+        stage_input_dir("2-transcribe", run_id) / "audio16k_full.wav",
+        stage_output_dir("1-ingest", run_id) / "audio" / "audio16k_full.wav",
         ROOT / "2-transcribe" / "input" / "audio16k_full.wav",
         ROOT / "1-ingest" / "output" / "audio" / "audio16k_full.wav",
     ):
@@ -659,7 +750,7 @@ def archive_current_run():
         "run_id": run_id,
         "video": media_data,
         "ingest": ingest,
-        "summary": summary("2-transcribe"),
+        "summary": summary("2-transcribe", run_id),
         "files": files,
         "audio": audio_name,
         "archived_at": now_iso(),
@@ -670,6 +761,7 @@ def archive_current_run():
     if destination.exists():
         shutil.rmtree(destination)
     temporary.rename(destination)
+    write_current_run_pointer(run_id)
     return run_id
 
 
@@ -836,7 +928,8 @@ def jobs():
     result = []
     has_current_archive = any(record.get("run_id") == current for record in archives)
     if marker and not has_current_archive:
-        ingest = read_json("1-ingest/output/ingest.json") or {}
+        live_run = marker.get("run_id") or read_current_run_pointer()
+        ingest = ingest_for_run(live_run)
         live_url = marker.get("url") or ""
         live = {
             "id": marker_job or "current",
@@ -878,8 +971,9 @@ def job_detail(job_id):
         return history_detail(job_id)
     marker = current_job() or {}
     if marker.get("job_id") == job_id or marker.get("run_id") == job_id:
-        media_data = media()
-        ingest = read_json("1-ingest/output/ingest.json") or {}
+        live_run = marker.get("run_id") or read_current_run_pointer()
+        media_data = media(live_run)
+        ingest = ingest_for_run(live_run)
         return {
             "run_id": marker.get("run_id"),
             "video": media_data,
@@ -901,7 +995,7 @@ def prepare_stage_workspace(run_id, stage_id):
     audio = archive / "audio16k_full.wav"
     if not audio.is_file():
         raise FileNotFoundError(f"archived audio missing for {run_id}")
-    destination = ROOT / "2-transcribe" / "input" / "audio16k_full.wav"
+    destination = stage_input_dir("2-transcribe", run_id) / "audio16k_full.wav"
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(audio, destination)
 
@@ -912,25 +1006,32 @@ def update_job_after_stage(run_id, stage_id):
     if not record:
         raise FileNotFoundError(f"history entry missing: {run_id}")
     if stage_id == "1-ingest":
-        ingest_path = ROOT / "1-ingest" / "output" / "ingest.json"
+        job_root = stage_output_dir("1-ingest", run_id)
+        ingest_path = job_root / "ingest.json"
+        if not ingest_path.is_file():
+            ingest_path = ROOT / "1-ingest" / "output" / "ingest.json"
         if not ingest_path.is_file():
             raise FileNotFoundError("ingest output missing")
         shutil.copy2(ingest_path, archive / "ingest.json")
-        audio = ROOT / "1-ingest" / "output" / "audio" / "audio16k_full.wav"
+        audio = job_root / "audio" / "audio16k_full.wav"
+        if not audio.is_file():
+            audio = ROOT / "1-ingest" / "output" / "audio" / "audio16k_full.wav"
         if audio.is_file():
             shutil.copy2(audio, archive / "audio16k_full.wav")
             record["audio"] = "audio16k_full.wav"
+        shutil.rmtree(stage_output_dir("2-transcribe", run_id), ignore_errors=True)
         for filename in TRANSCRIBE_FILES:
             stale = archive / filename
             if stale.exists():
                 stale.unlink()
         ingest = read_json_path(archive / "ingest.json") or {}
         record["ingest"] = ingest
-        record["video"] = media()
+        record["video"] = media(run_id)
         record["summary"] = {}
     elif stage_id == "2-transcribe":
+        job_root = stage_output_dir("2-transcribe", run_id)
         for filename in TRANSCRIBE_FILES:
-            source = ROOT / "2-transcribe" / "output" / filename
+            source = job_root / filename
             if source.is_file():
                 shutil.copy2(source, archive / filename)
         record["summary"] = transcribe_summary_from_path(archive)
@@ -941,20 +1042,6 @@ def update_job_after_stage(run_id, stage_id):
     with open(archive / "run.json", "w", encoding="utf-8") as fh:
         json.dump(record, fh, indent=1)
     return record
-
-
-def _targeted_dir(run_id):
-    return HISTORY_DIR / run_id / TARGETED_DIR
-
-
-def _targeted_path(run_id, out_dir=None):
-    archive = HISTORY_DIR / run_id
-    path = Path(out_dir) if out_dir else archive / TARGETED_DIR
-    try:
-        stored = path.resolve().relative_to(archive.resolve()).as_posix()
-    except ValueError:
-        stored = str(path.resolve())
-    return path, stored
 
 
 def _write_targeted_record(run_id, targeted):
@@ -1033,7 +1120,14 @@ def _targeted_previews(path):
 
 
 def update_targeted_after_run(run_id, out_dir=None):
-    path, stored = _targeted_path(run_id, out_dir)
+    archive = HISTORY_DIR / run_id / TARGETED_DIR
+    if out_dir:
+        source = Path(out_dir).resolve()
+        if source != archive.resolve():
+            if archive.exists():
+                shutil.rmtree(archive)
+            shutil.copytree(source, archive)
+    path = archive
     record = read_json_path(HISTORY_DIR / run_id / "run.json")
     if not record:
         raise FileNotFoundError(f"history entry missing: {run_id}")
@@ -1042,7 +1136,7 @@ def update_targeted_after_run(run_id, out_dir=None):
         {
             "status": "succeeded",
             "mode": "yamnet_qwen",
-            "path": stored,
+            "path": TARGETED_DIR,
             "updated_at": now_iso(),
             "finished_at": now_iso(),
             "error": None,

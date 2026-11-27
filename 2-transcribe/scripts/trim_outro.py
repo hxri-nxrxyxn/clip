@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -8,8 +9,15 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 STAGE = SCRIPT_DIR.parent
 ROOT = STAGE.parent
-IN = STAGE / "input"
-OUT = STAGE / "output"
+
+RUN_ID = os.environ.get("CLIP_RUN_ID", "").strip()
+if not RUN_ID:
+    try:
+        RUN_ID = (ROOT / "1-ingest" / "output" / "current_run_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        RUN_ID = ""
+IN = STAGE / "input" / RUN_ID if RUN_ID else STAGE / "input"
+OUT = STAGE / "output" / RUN_ID if RUN_ID else STAGE / "output"
 AUDIO_DIR = OUT / "audio"
 
 sys.path.insert(0, str(ROOT / "app"))

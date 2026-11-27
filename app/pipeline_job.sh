@@ -12,4 +12,6 @@ else
     bash "$ROOT/1-ingest/scripts/run.sh"
 fi
 
+RUN_ID="$(tr -d '[:space:]' < "$ROOT/1-ingest/output/current_run_id")"
+export CLIP_RUN_ID="$RUN_ID"
 bash "$ROOT/2-transcribe/scripts/run.sh"

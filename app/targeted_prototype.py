@@ -486,7 +486,7 @@ def resolve_archive(run_id):
 
 
 def run(args, started, run_id, archive):
-    out_dir = Path(args.out) if args.out else ROOT / "app" / "prototype" / run_id
+    out_dir = Path(args.out) if args.out else ROOT / "2-transcribe" / "output" / run_id / "targeted"
     if not out_dir.is_absolute():
         out_dir = ROOT / out_dir
     out_dir = out_dir.resolve()

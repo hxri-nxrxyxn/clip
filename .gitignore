@@ -31,7 +31,9 @@ HF_TOKEN*
 # Generated stage data
 1-ingest/output/*
 !1-ingest/output/.gitkeep
-2-transcribe/input/audio16k_full.wav
+2-transcribe/input/*
+!2-transcribe/input/.gitkeep
+!2-transcribe/input/selected_threshold.txt
 2-transcribe/output/*
 !2-transcribe/output/.gitkeep
 !2-transcribe/output/audio/

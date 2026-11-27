@@ -1,6 +1,7 @@
 import difflib
 import json
 import math
+import os
 import re
 import sys
 import textwrap
@@ -9,7 +10,14 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 STAGE = SCRIPT_DIR.parent
 ROOT = STAGE.parent
-OUT = STAGE / "output"
+
+RUN_ID = os.environ.get("CLIP_RUN_ID", "").strip()
+if not RUN_ID:
+    try:
+        RUN_ID = (ROOT / "1-ingest" / "output" / "current_run_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        RUN_ID = ""
+OUT = STAGE / "output" / RUN_ID if RUN_ID else STAGE / "output"
 
 sys.path.insert(0, str(ROOT / "app"))
 import config

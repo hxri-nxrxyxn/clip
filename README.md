@@ -25,14 +25,24 @@ Each stage contains `input/`, `output/`, `services/`, and `scripts/`.
 ## Run
 
 ```bash
-1-ingest/scripts/run.sh "https://www.youtube.com/watch?v=..."
-2-transcribe/scripts/run.sh
+app/pipeline_job.sh "https://www.youtube.com/watch?v=..."
 ```
 
 `1-ingest/scripts/run.sh` also accepts a local media file instead of a URL, or reads
-the URL from `1-ingest/input/url.txt`. It writes the normalized 16 kHz mono WAV to
-`1-ingest/output/audio/audio16k_full.wav` and hands it off to
-`2-transcribe/input/audio16k_full.wav` automatically.
+the URL from `1-ingest/input/url.txt`. It computes a `run_id`, writes job outputs to
+`1-ingest/output/<run_id>/`, and hands the normalized 16 kHz mono WAV to
+`2-transcribe/input/<run_id>/audio16k_full.wav` automatically.
+
+Each stage keeps job-scoped files:
+
+```text
+1-ingest/output/<run_id>/
+2-transcribe/input/<run_id>/
+2-transcribe/output/<run_id>/
+2-transcribe/output/<run_id>/targeted/
+```
+
+`app/history/<run_id>/` remains the archived snapshot used by the web monitor.
 
 Optional yt-dlp inputs:
 
@@ -44,6 +54,24 @@ Golden transcription checks:
 ```bash
 2-transcribe/scripts/test_golden_clips.sh
 ```
+
+## Layout and cleanup
+
+Migrate existing root-level stage outputs into the current job folder:
+
+```bash
+.venv/bin/python app/layout.py migrate --run-id <run_id>
+```
+
+Remove a job's module working files after it is archived:
+
+```bash
+.venv/bin/python app/layout.py cleanup --run-id <run_id>
+.venv/bin/python app/layout.py cleanup --all --dry-run
+```
+
+`cleanup` never removes `app/history/<run_id>/`; it only removes stage
+`input/<run_id>/` and `output/<run_id>/` working folders.
 
 ## Web monitor
 
@@ -68,7 +96,7 @@ These are intentionally not committed:
 
 - `2-transcribe/services/yamnet/yamnet.tflite`
 - `2-transcribe/services/whisper/models/` (Whisper model cache)
-- input audio under `1-ingest/output/` or `2-transcribe/input/`
+- input audio under `1-ingest/output/<run_id>/` or `2-transcribe/input/<run_id>/`
 - the host `.venv` used by scripts such as `audio_tags.py` and `merge_tags.py`
 
 Generated audio, transcripts, model caches, and the virtual environment are ignored by Git.
