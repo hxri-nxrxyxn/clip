@@ -1,24 +1,25 @@
 import argparse
-import csv
 import json
-import math
-import os
 import shutil
 import subprocess
 import sys
 import time
-import wave
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from ai_edge_litert.interpreter import Interpreter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import config
 import audio_utils
 import llm_select
 import pipeline
+
+if TYPE_CHECKING:
+    from app import config
+else:
+    import config
 
 ROOT = pipeline.ROOT
 YAMNET_MODEL = config.path("yamnet", "model")
@@ -30,7 +31,9 @@ WIN = int(config.get("yamnet", "window", 16000))
 HOP = int(config.get("yamnet", "hop", 8000))
 YAMNET_SAMPLES = int(config.get("yamnet", "yamnet_samples", 15600))
 MUSIC_INDEX = int(config.get("yamnet", "music_index", 132))
-TRIGGER_GROUPS = tuple(config.get("yamnet", "trigger_groups", ["LAUGHTER", "SCREAMING", "SHOUTING"]))
+TRIGGER_GROUPS = tuple(
+    config.get("yamnet", "trigger_groups", ["LAUGHTER", "SCREAMING", "SHOUTING"])
+)
 TAG_MEMBERSHIP = float(config.get("yamnet", "tag_membership", 0.20))
 PEAK_FLOOR = float(config.get("yamnet", "peak_floor", 0.35))
 LOUD_DB = float(config.get("yamnet", "loud_db", 6.0))
@@ -43,11 +46,15 @@ TRIGGER_NEEDLES = {
     "SHOUTING": ("shout",),
 }
 
-read_wav = audio_utils.read_wav
+def read_wav(path):
+    return audio_utils.read_wav(path, SAMPLE_RATE)
 wav_duration = audio_utils.wav_duration
-load_classes = lambda: audio_utils.load_classes(YAMNET_CLASS_MAP)
-group_indices = lambda rows: audio_utils.group_indices(rows, TRIGGER_GROUPS, TRIGGER_NEEDLES)
+def load_classes():
+    return audio_utils.load_classes(YAMNET_CLASS_MAP)
+def group_indices(rows):
+    return audio_utils.group_indices(rows, TRIGGER_GROUPS, TRIGGER_NEEDLES)
 rms_db = audio_utils.rms_db
+clock = pipeline.clock
 
 
 def run_yamnet(audio_path, out_path):
@@ -56,7 +63,7 @@ def run_yamnet(audio_path, out_path):
     duration = len(audio) / SAMPLE_RATE
     rows = load_classes()
     groups = group_indices(rows)
-    print(f"[prototype] YAMNet groups: {groups}", flush=True)
+    print(f"[targeted] YAMNet groups: {groups}", flush=True)
 
     interpreter = Interpreter(model_path=str(YAMNET_MODEL))
     interpreter.allocate_tensors()
@@ -109,7 +116,7 @@ def run_yamnet(audio_path, out_path):
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=1)
     print(
-        f"[prototype] YAMNet done: {len(windows)} windows in {time.time() - started:.1f}s",
+        f"[targeted] YAMNet done: {len(windows)} windows in {time.time() - started:.1f}s",
         flush=True,
     )
     return meta
@@ -199,7 +206,7 @@ def build_candidates(meta, pre, post, merge_gap, limit, vad_path):
         if peak_score < peak_floor:
             continue
         types = {}
-        for item, matched in block["windows"]:
+        for _item, matched in block["windows"]:
             for group, score in matched.items():
                 types[group] = max(types.get(group, 0.0), round(score, 4))
         expanded_start = max(0.0, float(block["start"]) - pre)
@@ -221,18 +228,14 @@ def build_candidates(meta, pre, post, merge_gap, limit, vad_path):
         )
 
     if limit > 0 and len(candidates) > limit:
-        candidates = sorted(candidates, key=lambda item: item["peak_score"], reverse=True)[
-            :limit
-        ]
+        candidates = sorted(candidates, key=lambda item: item["peak_score"], reverse=True)[:limit]
     candidates.sort(key=lambda item: item["start"])
 
     merged = []
     for candidate in candidates:
         if merged and candidate["window_start"] <= merged[-1]["window_end"]:
             current = merged[-1]
-            current["window_start"] = min(
-                current["window_start"], candidate["window_start"]
-            )
+            current["window_start"] = min(current["window_start"], candidate["window_start"])
             current["window_end"] = max(current["window_end"], candidate["window_end"])
             current["start"] = min(current["start"], candidate["start"])
             current["end"] = max(current["end"], candidate["end"])
@@ -254,10 +257,7 @@ def build_candidates(meta, pre, post, merge_gap, limit, vad_path):
         "post": post,
         "merge_gap": merge_gap,
         "candidates": merged,
-        "windows": [
-            {"start": item["window_start"], "end": item["window_end"]}
-            for item in merged
-        ],
+        "windows": [{"start": item["window_start"], "end": item["window_end"]} for item in merged],
     }
     return payload
 
@@ -302,15 +302,13 @@ def run_targeted_whisper(audio_path, out_dir, candidates_path):
         "python3",
         "/repo/app/targeted_whisper.py",
     ]
-    print("[prototype] running targeted Whisper…", flush=True)
+    print("[targeted] running targeted Whisper…", flush=True)
     subprocess.run(command, cwd=ROOT, check=True)
     return time.time() - started
 
 
 def tags_for_interval(start, end, windows, membership, loud_threshold, music_threshold):
-    overlapping = [
-        item for item in windows if item["end"] > start and item["start"] < end
-    ]
+    overlapping = [item for item in windows if item["end"] > start and item["start"] < end]
     tags = []
     for group in TRIGGER_GROUPS:
         score = max(
@@ -365,7 +363,7 @@ def select_candidates(payload, lines, words, args, api_key, base_url):
     if not args.no_llm:
         llm_ready = llm_select.server_ready(base_url, api_key)
         print(
-            f"[prototype] Qwen {'available' if llm_ready else 'unavailable; using fallback'}",
+            f"[targeted] Qwen {'available' if llm_ready else 'unavailable; using fallback'}",
             flush=True,
         )
     selections = []
@@ -374,14 +372,10 @@ def select_candidates(payload, lines, words, args, api_key, base_url):
         window_start = float(candidate["window_start"])
         window_end = float(candidate["window_end"])
         candidate_lines = [
-            line
-            for line in lines
-            if line["end"] > window_start and line["start"] < window_end
+            line for line in lines if line["end"] > window_start and line["start"] < window_end
         ]
         candidate_words = [
-            word
-            for word in words
-            if word["end"] > window_start and word["start"] < window_end
+            word for word in words if word["end"] > window_start and word["start"] < window_end
         ]
         started = time.time()
         used_llm = False
@@ -401,7 +395,7 @@ def select_candidates(payload, lines, words, args, api_key, base_url):
                 start = result["start"]
                 end = result["end"]
             except Exception as exc:
-                print(f"[prototype] LLM failed for candidate {candidate['id']}: {exc}", flush=True)
+                print(f"[targeted] LLM failed for candidate {candidate['id']}: {exc}", flush=True)
                 result = llm_select.heuristic_clip(candidate, candidate_words)
                 used_llm = False
                 reason = result["reason"]
@@ -423,9 +417,7 @@ def select_candidates(payload, lines, words, args, api_key, base_url):
                 "types": candidate["types"],
                 "reason": reason,
                 "llm_used": used_llm,
-                "transcript": "\n".join(
-                    format_event_line(line) for line in candidate_lines
-                ),
+                "transcript": "\n".join(format_event_line(line) for line in candidate_lines),
             }
         )
     return selections, llm_ready, llm_seconds
@@ -453,7 +445,7 @@ def resolve_archive(run_id):
 
 
 def run(args, started, run_id, archive):
-    out_dir = Path(args.out) if args.out else ROOT / "2-transcribe" / "output" / run_id / "targeted"
+    out_dir = Path(args.out) if args.out else ROOT / "3-select" / "output" / run_id
     if not out_dir.is_absolute():
         out_dir = ROOT / out_dir
     out_dir = out_dir.resolve()
@@ -461,9 +453,9 @@ def run(args, started, run_id, archive):
     audio_path = archive / "audio16k_full.wav"
     if not audio_path.is_file():
         raise SystemExit(f"missing audio: {audio_path}")
-    print(f"[prototype] run_id={run_id}", flush=True)
-    print(f"[prototype] audio={audio_path}", flush=True)
-    print(f"[prototype] out={out_dir}", flush=True)
+    print(f"[targeted] run_id={run_id}", flush=True)
+    print(f"[targeted] audio={audio_path}", flush=True)
+    print(f"[targeted] out={out_dir}", flush=True)
 
     meta_path = out_dir / "audio_tags.json"
     if args.rescan or not (archive / "audio_tags.json").is_file():
@@ -471,7 +463,7 @@ def run(args, started, run_id, archive):
     else:
         shutil.copy2(archive / "audio_tags.json", meta_path)
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        print("[prototype] reused archived audio_tags.json", flush=True)
+        print("[targeted] reused archived audio_tags.json", flush=True)
 
     candidates_started = time.time()
     payload = build_candidates(
@@ -487,8 +479,7 @@ def run(args, started, run_id, archive):
     candidates_path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
     candidates_seconds = time.time() - candidates_started
     print(
-        f"[prototype] candidates: {len(payload['candidates'])} "
-        f"in {candidates_seconds:.1f}s",
+        f"[targeted] candidates: {len(payload['candidates'])} in {candidates_seconds:.1f}s",
         flush=True,
     )
 
@@ -505,7 +496,7 @@ def run(args, started, run_id, archive):
     api_key = llm_select.find_api_key(explicit_file=args.llm_api_key_file)
     base_url = llm_select.resolve_base_url(args.llm_base_url, api_key)
     if not args.no_llm:
-        print(f"[prototype] Qwen endpoint={base_url}", flush=True)
+        print(f"[targeted] Qwen endpoint={base_url}", flush=True)
     selections, llm_ready, llm_seconds = select_candidates(
         payload, lines, words, args, api_key, base_url
     )
@@ -530,11 +521,9 @@ def run(args, started, run_id, archive):
         "llm_ready": llm_ready,
         "total_seconds": round(time.time() - started, 1),
     }
-    (out_dir / "timings.json").write_text(
-        json.dumps(timings, indent=1), encoding="utf-8"
-    )
-    print(f"[prototype] selections: {len(selections)}", flush=True)
-    print(f"[prototype] timings: {timings}", flush=True)
+    (out_dir / "timings.json").write_text(json.dumps(timings, indent=1), encoding="utf-8")
+    print(f"[targeted] selections: {len(selections)}", flush=True)
+    print(f"[targeted] timings: {timings}", flush=True)
     return out_dir
 
 

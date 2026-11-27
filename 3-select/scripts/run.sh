@@ -19,7 +19,7 @@ fi
 OUT="$ROOT/3-select/output/$RUN_ID"
 mkdir -p "$OUT"
 
-exec "$ROOT/.venv/bin/python" "$ROOT/app/targeted_prototype.py" \
+exec "$ROOT/.venv/bin/python" "$ROOT/app/targeted.py" \
     --run-id "$RUN_ID" \
     --out "$OUT" \
     --persist \

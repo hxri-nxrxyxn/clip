@@ -5,9 +5,13 @@ import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-import config
+if TYPE_CHECKING:
+    from app import config
+else:
+    import config
 
 DEFAULT_BASE_URL = str(config.get("llm", "base_url", "http://127.0.0.1:38405"))
 DEFAULT_MODEL = str(config.get("llm", "model", "unsloth/Qwen3.6-35B-A3B-MTP-GGUF"))
@@ -28,8 +32,7 @@ def _key_from_container(container=None):
     if not shutil.which("docker"):
         return None
     command = (
-        "cat $(ls -t /opt/unsloth-studio/auth/llama_api_key_* 2>/dev/null | head -1) "
-        "2>/dev/null"
+        "cat $(ls -t /opt/unsloth-studio/auth/llama_api_key_* 2>/dev/null | head -1) 2>/dev/null"
     )
     try:
         result = subprocess.run(
@@ -243,9 +246,9 @@ def select_clip(
         "Do not return markdown or commentary."
     )
     user = f"""Candidate window: {window_start:.3f}s to {window_end:.3f}s
-Peak event time: {float(candidate['peak_time']):.3f}s
-Peak score: {float(candidate['peak_score']):.3f}
-Event types: {json.dumps(candidate.get('types', {}), sort_keys=True)}
+Peak event time: {float(candidate["peak_time"]):.3f}s
+Peak score: {float(candidate["peak_score"]):.3f}
+Event types: {json.dumps(candidate.get("types", {}), sort_keys=True)}
 Duration limit: {MIN_CLIP:g} to {MAX_CLIP:g} seconds.
 
 Choose a clip that includes setup and payoff, avoids cutting sentences or words,

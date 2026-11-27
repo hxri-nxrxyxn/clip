@@ -66,3 +66,12 @@ app/runs/*
 app/history/
 app/prototype/
 app/current_job.json
+1-ingest/output/current_run_id
+
+# Tooling and caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/

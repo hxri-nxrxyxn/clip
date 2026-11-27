@@ -4,10 +4,7 @@ import textwrap
 
 
 def hhmmss(seconds, floor=False):
-    if floor:
-        total = max(0, int(math.floor(seconds)))
-    else:
-        total = max(0, int(round(seconds)))
+    total = max(0, int(math.floor(seconds))) if floor else max(0, int(round(seconds)))
     return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
 
 
@@ -26,11 +23,7 @@ def vtt_ts(seconds):
 
 
 def vtt_escape(text):
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def wrap_text(text, width=42):

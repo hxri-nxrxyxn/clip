@@ -5,6 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import contextlib
+
 import pipeline
 
 APP_DIR = Path(__file__).resolve().parent
@@ -28,9 +30,8 @@ def move_path(source, destination, dry_run=False):
             if child.name == ".gitkeep":
                 continue
             total += move_path(child, destination / child.name, dry_run)
-        if not any(source.iterdir()):
-            if not dry_run:
-                source.rmdir()
+        if not any(source.iterdir()) and not dry_run:
+            source.rmdir()
         return total
     if destination.exists():
         print(f"skip (exists): {source} -> {destination}")
@@ -63,13 +64,18 @@ def migrate(run_id=None, dry_run=False):
     )
     transcribe_root = ROOT / "2-transcribe" / "output"
     transcribe_job = pipeline.stage_output_dir("2-transcribe", resolved)
-    for child in sorted(transcribe_root.iterdir()):
-        if child.name in {".gitkeep", resolved}:
-            continue
-        moved += move_path(child, transcribe_job / child.name, dry_run)
+    if transcribe_root.is_dir():
+        for child in sorted(transcribe_root.iterdir()):
+            if child.name in {".gitkeep", resolved}:
+                continue
+            moved += move_path(child, transcribe_job / child.name, dry_run)
+    select_job = pipeline.stage_output_dir("3-select", resolved)
+    transcribe_targeted = pipeline.stage_output_dir("2-transcribe", resolved) / "targeted"
+    if transcribe_targeted.is_dir():
+        moved += move_path(transcribe_targeted, select_job, dry_run)
     legacy_targeted = APP_DIR / "prototype" / resolved
     if legacy_targeted.is_dir():
-        moved += move_path(legacy_targeted, transcribe_job / "targeted", dry_run)
+        moved += move_path(legacy_targeted, select_job, dry_run)
     if not dry_run:
         pipeline.write_current_run_pointer(resolved)
     print(f"[layout] {'would move' if dry_run else 'moved'} {moved / 1024 / 1024:.1f} MB")
@@ -104,7 +110,12 @@ def cleanup_run(run_id, dry_run=False, force=False):
                 shutil.rmtree(path)
             else:
                 path.unlink()
-    print(f"[cleanup] {run_id}: {'would free' if dry_run else 'freed'} {total / 1024 / 1024:.1f} MB")
+    if not dry_run and pipeline.read_current_run_pointer() == run_id:
+        with contextlib.suppress(FileNotFoundError):
+            pipeline.CURRENT_RUN_POINTER.unlink()
+    print(
+        f"[cleanup] {run_id}: {'would free' if dry_run else 'freed'} {total / 1024 / 1024:.1f} MB"
+    )
     return total
 
 

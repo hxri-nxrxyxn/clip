@@ -1,4 +1,3 @@
-import json
 import math
 import sys
 from pathlib import Path
@@ -18,8 +17,7 @@ def calculate_activity(meta, words, bin_seconds=10):
         return None
     windows = meta["windows"]
     duration = float(
-        meta.get("duration_seconds")
-        or max(float(window["end"]) for window in windows)
+        meta.get("duration_seconds") or max(float(window["end"]) for window in windows)
     )
     if duration <= 0:
         return None
@@ -146,9 +144,7 @@ def calculate_activity(meta, words, bin_seconds=10):
         "duration": round(duration, 1),
         "words": len(words or []),
         "loud_windows": sum(
-            1
-            for window in windows
-            if float(window.get("rel_db", -999.0)) >= loud_threshold
+            1 for window in windows if float(window.get("rel_db", -999.0)) >= loud_threshold
         ),
         "laughter_windows": sum(
             1
@@ -165,11 +161,7 @@ def calculate_activity(meta, words, bin_seconds=10):
             for window in windows
             if float((window.get("scores") or {}).get("SHOUTING", 0.0)) >= tag_membership
         ),
-        "music_windows": sum(
-            1
-            for window in windows
-            if float(window.get("music", 0.0)) >= 0.5
-        ),
+        "music_windows": sum(1 for window in windows if float(window.get("music", 0.0)) >= 0.5),
     }
     return {
         "duration": round(duration, 1),

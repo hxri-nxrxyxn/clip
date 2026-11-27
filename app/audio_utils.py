@@ -1,7 +1,6 @@
 import csv
 import math
 import wave
-from pathlib import Path
 
 import numpy as np
 
@@ -9,7 +8,9 @@ import numpy as np
 def read_wav(path, expected_rate=16000):
     with wave.open(str(path), "rb") as fh:
         if fh.getnchannels() != 1 or fh.getframerate() != expected_rate:
-            raise ValueError(f"expected {expected_rate} Hz mono wav, got rate={fh.getframerate()} ch={fh.getnchannels()}")
+            raise ValueError(
+                f"expected {expected_rate} Hz mono wav, got rate={fh.getframerate()} ch={fh.getnchannels()}"
+            )
         if fh.getsampwidth() != 2:
             raise ValueError("expected 16-bit PCM wav")
         raw = fh.readframes(fh.getnframes())

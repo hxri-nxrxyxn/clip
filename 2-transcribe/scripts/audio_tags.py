@@ -1,25 +1,14 @@
-import csv
 import json
-import math
-import os
 import sys
-import wave
 from pathlib import Path
 
 import numpy as np
 from ai_edge_litert.interpreter import Interpreter
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-STAGE = SCRIPT_DIR.parent
-ROOT = STAGE.parent
+from run_context import ROOT, STAGE, stage_paths
 
-RUN_ID = os.environ.get("CLIP_RUN_ID", "").strip()
-if not RUN_ID:
-    try:
-        RUN_ID = (ROOT / "1-ingest" / "output" / "current_run_id").read_text(encoding="utf-8").strip()
-    except OSError:
-        RUN_ID = ""
-OUT = STAGE / "output" / RUN_ID if RUN_ID else STAGE / "output"
+_RUN_ID, _IN, OUT = stage_paths()
 
 sys.path.insert(0, str(ROOT / "app"))
 import audio_utils
@@ -46,7 +35,7 @@ TRIGGER_NEEDLES = {
     "SHOUTING": ("shout",),
 }
 
-read_wav = audio_utils.read_wav
+read_wav = lambda path: audio_utils.read_wav(path, SAMPLE_RATE)
 load_classes = audio_utils.load_classes
 rms_db = audio_utils.rms_db
 

@@ -6,14 +6,9 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUN_ID="${1:-}"
 
 if [[ -z "$RUN_ID" ]]; then
-    echo "usage: targeted_job.sh RUN_ID [targeted_prototype.py args...]" >&2
+    echo "usage: targeted_job.sh RUN_ID [targeted.py args...]" >&2
     exit 2
 fi
 shift
 
-OUT="$ROOT/2-transcribe/output/$RUN_ID/targeted"
-exec "$ROOT/.venv/bin/python" "$SCRIPT_DIR/targeted_prototype.py" \
-    --run-id "$RUN_ID" \
-    --out "$OUT" \
-    --persist \
-    "$@"
+exec bash "$ROOT/3-select/scripts/run.sh" "$RUN_ID" "$@"

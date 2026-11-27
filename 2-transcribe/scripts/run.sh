@@ -6,10 +6,7 @@ STAGE="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT="$(cd "$STAGE/.." && pwd)"
 PY="$ROOT/.venv/bin/python"
 
-RUN_ID="${CLIP_RUN_ID:-}"
-if [[ -z "$RUN_ID" && -f "$ROOT/1-ingest/output/current_run_id" ]]; then
-    RUN_ID="$(tr -d '[:space:]' < "$ROOT/1-ingest/output/current_run_id")"
-fi
+RUN_ID="${CLIP_RUN_ID:-$("$PY" "$SCRIPT_DIR/run_context.py")}"
 [[ -n "$RUN_ID" ]] || { echo "[transcribe] ERROR: missing CLIP_RUN_ID" >&2; exit 2; }
 export CLIP_RUN_ID="$RUN_ID"
 

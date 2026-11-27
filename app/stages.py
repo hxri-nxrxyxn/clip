@@ -3,7 +3,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from storage import ROOT, file_after, read_json_path, stage_output_dir, stage_input_dir, resolve_run_id, current_since, now_iso
+from storage import (
+    ROOT,
+    current_since,
+    file_after,
+    now_iso,
+    read_json_path,
+    resolve_run_id,
+)
 
 TARGETED_DIR = "targeted"
 
@@ -23,13 +30,13 @@ STAGES = {
                 "Send to Transcribe",
                 [
                     (
-                        "1-ingest/output/audio/audio16k_full.wav",
-                        "2-transcribe/input/audio16k_full.wav",
+                        "1-ingest/output/{run_id}/audio/audio16k_full.wav",
+                        "2-transcribe/input/{run_id}/audio16k_full.wav",
                     )
                 ],
             )
         ],
-        "previews": [("Ingest manifest", "1-ingest/output/ingest.json", "json")],
+        "previews": [("Ingest manifest", "1-ingest/output/{run_id}/ingest.json", "json")],
     },
     "2-transcribe": {
         "number": 2,
@@ -37,25 +44,38 @@ STAGES = {
         "description": "Run Whisper, trim the outro, tag audio with YAMNet, and write timestamped and tagged transcripts.",
         "command": ["bash", "2-transcribe/scripts/run.sh"],
         "url": False,
-        "required": ["2-transcribe/input/audio16k_full.wav"],
+        "required": ["2-transcribe/input/{run_id}/audio16k_full.wav"],
         "handoffs": [
             (
                 "3-select",
                 "Send to Select",
-                [("2-transcribe/output/audio/audio16k.wav", "3-select/input/audio16k.wav")],
+                [
+                    (
+                        "2-transcribe/output/{run_id}/audio/audio16k.wav",
+                        "3-select/input/{run_id}/audio16k.wav",
+                    )
+                ],
             )
         ],
         "previews": [
-            ("Timestamped transcript", "2-transcribe/output/transcript.txt", "text"),
-            ("Tagged transcript", "2-transcribe/output/transcript_with_audio_tags.txt", "text"),
-            ("Tagged WebVTT", "2-transcribe/output/transcript_with_audio_tags.vtt", "text"),
+            ("Timestamped transcript", "2-transcribe/output/{run_id}/transcript.txt", "text"),
+            (
+                "Tagged transcript",
+                "2-transcribe/output/{run_id}/transcript_with_audio_tags.txt",
+                "text",
+            ),
+            (
+                "Tagged WebVTT",
+                "2-transcribe/output/{run_id}/transcript_with_audio_tags.vtt",
+                "text",
+            ),
         ],
     },
     "3-select": {
         "number": 3,
         "title": "Select",
-        "description": "Highlight selection. This stage is a scaffold.",
-        "command": None,
+        "description": "Run YAMNet-guided targeted Whisper and Qwen clip selection.",
+        "command": ["bash", "3-select/scripts/run.sh"],
         "url": False,
         "required": [],
         "handoffs": [],
@@ -92,6 +112,13 @@ STAGES = {
         "previews": [],
     },
 }
+
+
+def format_path(value, run_id=None):
+    run_id = resolve_run_id(run_id)
+    if run_id:
+        return value.format(run_id=run_id)
+    return value.replace("{run_id}/", "")
 
 
 def file_info(relpath):
@@ -149,7 +176,7 @@ def outputs(stage_id, since=None, run_id=None):
         if since and not file_after(item["mtime"], since):
             continue
         relative = Path(item["path"]).relative_to(base)
-        if relative.parts and relative.parts[0] == TARGETED_DIR:
+        if TARGETED_DIR in relative.parts:
             continue
         item["url"] = f"/files/{stage_id}/{relative.as_posix()}"
         items.append(item)
@@ -172,7 +199,9 @@ def status(stage_id, stage, active_job=None):
         return "scaffold"
     if active_job and active_job["stage"] == stage_id and active_job["status"] == "running":
         return "running"
-    since = None if stage_id == "1-ingest" else current_since()
-    if outputs(stage_id, since):
+    run_id = resolve_run_id()
+    since = None if stage_id == "1-ingest" else current_since(run_id)
+    if outputs(stage_id, since, run_id=run_id):
         return "complete"
-    return "ready" if all((ROOT / item).exists() for item in stage["required"]) else "blocked"
+    required = [format_path(item, run_id) for item in stage["required"]]
+    return "ready" if all((ROOT / item).exists() for item in required) else "blocked"

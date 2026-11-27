@@ -1,9 +1,12 @@
+import contextlib
 import json
 import re
 import shutil
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
+from app.models import JobRecord
 
 APP_DIR = Path(__file__).resolve().parent
 ROOT = APP_DIR.parent
@@ -31,7 +34,7 @@ TRANSCRIBE_FILES = [
 
 def now_iso(value=None):
     value = value or time.time()
-    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(value, tz=UTC).isoformat()
 
 
 def parse_iso(value):
@@ -87,24 +90,20 @@ def current_job():
 
 
 def set_current_job(job_id, url, run_id=None):
-    if not run_id:
-        archive_current_run()
-    record = {
-        "job_id": job_id,
-        "url": url,
-        "run_id": run_id,
-        "started_at": now_iso(),
-        "status": "running",
-    }
+    record = JobRecord(
+        job_id=job_id,
+        url=url,
+        run_id=run_id,
+        started_at=now_iso(),
+        status="running",
+    ).to_dict()
     with open(CURRENT_JOB_PATH, "w", encoding="utf-8") as fh:
         json.dump(record, fh, indent=1)
     if run_id:
         write_current_run_pointer(run_id)
     else:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             CURRENT_RUN_POINTER.unlink()
-        except FileNotFoundError:
-            pass
     return record
 
 
@@ -129,15 +128,23 @@ def update_current_job(status):
     return record
 
 
+def reconcile_current_job():
+    record = current_job()
+    if record and record.get("status") == "running":
+        record["status"] = "failed"
+        record["error"] = "application restarted before the job finished"
+        with open(CURRENT_JOB_PATH, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=1)
+    return record
+
+
 def clear_current_job():
-    try:
+    with contextlib.suppress(FileNotFoundError):
         CURRENT_JOB_PATH.unlink()
-    except FileNotFoundError:
-        pass
 
 
 def run_id_for_ingest(ingest, video=None):
-    created = parse_iso(ingest.get("created_at")) or datetime.now(timezone.utc)
+    created = parse_iso(ingest.get("created_at")) or datetime.now(UTC)
     video_id = (video or {}).get("video_id") or ingest.get("video_id") or "video"
     return f"{slug(video_id)}-{created.strftime('%Y%m%d-%H%M%S')}"
 
@@ -240,6 +247,28 @@ def archive_files(path):
     ]
 
 
+def video_from_ingest(ingest):
+    source = ingest.get("source_file") or ""
+    url = ingest.get("webpage_url") or ingest.get("source_url") or ""
+    title = ingest.get("title")
+    if not title:
+        if url.startswith(("http://", "https://")):
+            title = url
+        elif source:
+            title = Path(source).name
+        else:
+            title = "No media loaded"
+    return {
+        "title": title,
+        "url": url,
+        "duration": ingest.get("duration_seconds"),
+        "source": source,
+        "video_id": ingest.get("video_id"),
+        "uploader": ingest.get("uploader"),
+        "sample_rate": ingest.get("sample_rate"),
+    }
+
+
 def archive_current_run(run_id=None):
     if not run_id:
         marker = current_job() or {}
@@ -308,15 +337,7 @@ def archive_current_run(run_id=None):
         break
     record = {
         "run_id": run_id,
-        "video": {
-            "title": ingest.get("title") or Path(ingest.get("source_file", "")).name or "No media loaded",
-            "url": ingest.get("webpage_url") or ingest.get("source_url") or "",
-            "duration": ingest.get("duration_seconds"),
-            "source": ingest.get("source_file", ""),
-            "video_id": ingest.get("video_id"),
-            "uploader": ingest.get("uploader"),
-            "sample_rate": ingest.get("sample_rate"),
-        },
+        "video": video_from_ingest(ingest),
         "ingest": ingest,
         "summary": transcribe_summary_from_path(transcribe_dir) if transcribe_dir.is_dir() else {},
         "files": files,
@@ -333,7 +354,7 @@ def archive_current_run(run_id=None):
     return run_id
 
 
-def history():
+def archived_runs(include_current=True):
     if not HISTORY_DIR.is_dir():
         return []
     current = current_run_id()
@@ -342,7 +363,9 @@ def history():
         if not path.is_dir():
             continue
         record = read_json_path(path / "run.json")
-        if not record or (current and record.get("run_id") == current):
+        if not record:
+            continue
+        if not include_current and current and record.get("run_id") == current:
             continue
         record["path"] = str(path)
         entries.append(record)
@@ -351,3 +374,7 @@ def history():
         reverse=True,
     )
     return entries
+
+
+def history():
+    return archived_runs(include_current=False)

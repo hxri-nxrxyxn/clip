@@ -7,10 +7,7 @@ from pathlib import Path
 try:
     import tomllib
 except ModuleNotFoundError:
-    try:
-        import tomli as tomllib
-    except ModuleNotFoundError:
-        tomllib = None
+    import tomli as tomllib  # type: ignore[no-redef]
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "local.toml"

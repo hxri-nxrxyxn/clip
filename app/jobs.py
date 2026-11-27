@@ -52,10 +52,9 @@ class Jobs:
             job_id = uuid.uuid4().hex[:12]
             stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
             log_path = self.runs_dir / f"{stamp}-{stage_id}-{job_id}.log"
-            log_file = open(log_path, "w", encoding="utf-8", errors="replace")
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
-            try:
+            with open(log_path, "w", encoding="utf-8", errors="replace") as log_file:
                 process = subprocess.Popen(
                     argv,
                     cwd=str(self.root_dir),
@@ -65,8 +64,6 @@ class Jobs:
                     start_new_session=True,
                     env=env,
                 )
-            finally:
-                log_file.close()
             job = {
                 "id": job_id,
                 "stage": stage_id,
@@ -103,9 +100,10 @@ class Jobs:
         with self.lock:
             result = None
             for job in self.jobs.values():
-                if job["stage"] == stage_id:
-                    if result is None or job["started"] > result["started"]:
-                        result = job
+                if job["stage"] == stage_id and (
+                    result is None or job["started"] > result["started"]
+                ):
+                    result = job
             return self.public(result) if result else None
 
     def current(self):
