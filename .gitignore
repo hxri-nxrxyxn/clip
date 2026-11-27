@@ -57,3 +57,10 @@ HF_TOKEN*
 # Test artifacts
 2-transcribe/scripts/tests/sweep_*.json
 2-transcribe/scripts/tests/sweep_results.json
+
+# App runtime
+app/runs/*
+!app/runs/.gitkeep
+app/history/
+app/prototype/
+app/current_job.json

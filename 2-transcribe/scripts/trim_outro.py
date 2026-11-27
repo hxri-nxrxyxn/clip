@@ -1,20 +1,26 @@
 import json
 import shutil
 import subprocess
+import sys
 import wave
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 STAGE = SCRIPT_DIR.parent
+ROOT = STAGE.parent
 IN = STAGE / "input"
 OUT = STAGE / "output"
 AUDIO_DIR = OUT / "audio"
+
+sys.path.insert(0, str(ROOT / "app"))
+import config
 
 FULL_WAV = IN / "audio16k_full.wav"
 PROC_WAV = AUDIO_DIR / "audio16k.wav"
 OPUS = AUDIO_DIR / "voice_only_16k.opus"
 MP3 = AUDIO_DIR / "voice_only_16k.mp3"
-TAIL_SECONDS = 2.0
+TAIL_SECONDS = float(config.get("outro", "tail_seconds", 2.0))
+CONFIDENCE_THRESHOLD = float(config.get("outro", "confidence_threshold", 0.05))
 
 
 def hhmmss(seconds):
@@ -39,7 +45,7 @@ def main():
     if not words:
         raise SystemExit("no whisper words to compute speech end")
 
-    confident = [w for w in words if float(w.get("probability", 0)) >= 0.05]
+    confident = [w for w in words if float(w.get("probability", 0)) >= CONFIDENCE_THRESHOLD]
     speech_end = max(float(word["end"]) for word in (confident or words))
 
     if not FULL_WAV.exists():

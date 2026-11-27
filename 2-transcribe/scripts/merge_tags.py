@@ -2,50 +2,61 @@ import difflib
 import json
 import math
 import re
+import sys
 import textwrap
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 STAGE = SCRIPT_DIR.parent
-IN = STAGE / "input"
+ROOT = STAGE.parent
 OUT = STAGE / "output"
 
-TAG_ORDER = [
-    ("LAUGHTER", "LAUGH"),
-    ("SCREAMING", "SCREAM"),
-    ("SHOUTING", "SHOUT"),
-]
+sys.path.insert(0, str(ROOT / "app"))
+import config
 
-MEMBERSHIP = 0.20
-PEAK_FLOOR = 0.35
-ABS_HIGH = 0.60
-ABS_MED = 0.45
-ABS_LOW = 0.35
-MAX_BRIDGE = 7.0
-CHUNK_SECONDS = 600.0
-PERCENTILE_MIN_SPANS = 8
+CFG = config.section("merge_tags")
+YAMNET = config.section("yamnet")
 
-LOUD_GAP = 3.0
-MUSIC_THRESHOLD = 0.5
-MUSIC_GAP = 1.5
+TAG_LABELS = {
+    "LAUGHTER": "LAUGH",
+    "SCREAMING": "SCREAM",
+    "SHOUTING": "SHOUT",
+}
+TRIGGER_GROUPS = tuple(
+    config.get("yamnet", "trigger_groups", ["LAUGHTER", "SCREAMING", "SHOUTING"])
+)
+TAG_ORDER = [(group, TAG_LABELS[group]) for group in TRIGGER_GROUPS if group in TAG_LABELS]
 
-PAUSE = 0.7
-MAX_WORDS = 10
-MAX_LINE_SECONDS = 5.0
-MIN_CUE_SECONDS = 0.5
-MAX_CUE_SECONDS = 7.0
-TAG_ATTACH_LEAD = 0.5
-VTT_WRAP_COLUMNS = 42
+MEMBERSHIP = float(CFG.get("membership", YAMNET.get("tag_membership", 0.20)))
+PEAK_FLOOR = float(CFG.get("peak_floor", YAMNET.get("peak_floor", 0.35)))
+ABS_HIGH = float(CFG.get("abs_high", 0.60))
+ABS_MED = float(CFG.get("abs_med", 0.45))
+ABS_LOW = float(CFG.get("abs_low", 0.35))
+MAX_BRIDGE = float(CFG.get("max_bridge", 7.0))
+CHUNK_SECONDS = float(CFG.get("chunk_seconds", 600.0))
+PERCENTILE_MIN_SPANS = int(CFG.get("percentile_min_spans", 8))
 
-MAX_REPEAT = 2
-DUP_WINDOW = 6.0
-DUP_RATIO = 0.85
+LOUD_GAP = float(CFG.get("loud_gap", 3.0))
+MUSIC_THRESHOLD = float(CFG.get("music_threshold", YAMNET.get("music_threshold", 0.5)))
+MUSIC_GAP = float(CFG.get("music_gap", 1.5))
 
-LOW_CONF_P = 0.15
-HIGH_CONF_P = 0.5
-ISOLATION_WINDOW = 1.0
-MIN_WORD_DUR = 0.08
-MAX_WORD_DUR = 2.0
+PAUSE = float(CFG.get("pause", 0.7))
+MAX_WORDS = int(CFG.get("max_words", 10))
+MAX_LINE_SECONDS = float(CFG.get("max_line_seconds", 5.0))
+MIN_CUE_SECONDS = float(CFG.get("min_cue_seconds", 0.5))
+MAX_CUE_SECONDS = float(CFG.get("max_cue_seconds", 7.0))
+TAG_ATTACH_LEAD = float(CFG.get("tag_attach_lead", 0.5))
+VTT_WRAP_COLUMNS = int(CFG.get("vtt_wrap_columns", 42))
+
+MAX_REPEAT = int(CFG.get("max_repeat", 2))
+DUP_WINDOW = float(CFG.get("dup_window", 6.0))
+DUP_RATIO = float(CFG.get("dup_ratio", 0.85))
+
+LOW_CONF_P = float(CFG.get("low_conf_p", 0.15))
+HIGH_CONF_P = float(CFG.get("high_conf_p", 0.5))
+ISOLATION_WINDOW = float(CFG.get("isolation_window", 1.0))
+MIN_WORD_DUR = float(CFG.get("min_word_dur", 0.08))
+MAX_WORD_DUR = float(CFG.get("max_word_dur", 2.0))
 
 
 def hhmmss(seconds, floor=False):
@@ -530,11 +541,11 @@ def write_vtt(texts, tags, limit=None):
 
 
 def main():
-    words = load_json(IN / "whisper_words.json")
-    meta = load_json(IN / "audio_tags.json")
+    words = load_json(OUT / "whisper_words.json")
+    meta = load_json(OUT / "audio_tags.json")
     limit = meta.get("duration_seconds")
 
-    metadata_path = IN / "metadata.json"
+    metadata_path = OUT / "metadata.json"
     if metadata_path.exists():
         cut = float(load_json(metadata_path)["trim_end_seconds"])
         limit = min(limit, cut) if limit is not None else cut

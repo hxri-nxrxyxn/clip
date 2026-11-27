@@ -9,42 +9,58 @@ Each stage contains `input/`, `output/`, `services/`, and `scripts/`.
 | Stage | Purpose |
 | --- | --- |
 | `1-ingest` | Download and normalize source audio |
-| `2-transcribe` | Whisper transcription, YAMNet audio tags, timestamped transcript |
+| `2-transcribe` | Whisper transcription, YAMNet audio tags, timestamped and tagged transcripts |
 | `3-select` | Highlight selection (scaffold) |
 | `4-reframe` | Reframe selected clips (scaffold) |
-| `5-caption` | Build transcript captions with audio tags |
+| `5-caption` | Render captions onto video (scaffold) |
 | `6-export` | Final packaging (scaffold) |
 
 ## Current status
 
 - `1-ingest` and `2-transcribe` are implemented.
-- `5-caption` builds the tagged transcript from `2-transcribe` output.
-- `3-select`, `4-reframe`, and `6-export` are scaffolds.
+- `2-transcribe` produces the timestamped transcript, YAMNet tags, and tagged TXT/VTT/JSON.
+- `3-select`, `4-reframe`, `5-caption`, and `6-export` are scaffolds.
 - Speaker diarization is not implemented yet.
 
 ## Run
 
 ```bash
-1-ingest/scripts/run.sh
-cp 1-ingest/output/audio/audio16k_full.wav 2-transcribe/input/
+1-ingest/scripts/run.sh "https://www.youtube.com/watch?v=..."
 2-transcribe/scripts/run.sh
 ```
 
-Then hand off to captioning:
+`1-ingest/scripts/run.sh` also accepts a local media file instead of a URL, or reads
+the URL from `1-ingest/input/url.txt`. It writes the normalized 16 kHz mono WAV to
+`1-ingest/output/audio/audio16k_full.wav` and hands it off to
+`2-transcribe/input/audio16k_full.wav` automatically.
 
-```bash
-cp 2-transcribe/output/whisper_words.json \
-   2-transcribe/output/audio_tags.json \
-   2-transcribe/output/metadata.json \
-   5-caption/input/
-5-caption/scripts/run.sh
-```
+Optional yt-dlp inputs:
+
+- `YTDLP_COOKIES=/path/to/cookies.txt`
+- `YTDLP_COOKIES_FROM_BROWSER=chrome`
 
 Golden transcription checks:
 
 ```bash
 2-transcribe/scripts/test_golden_clips.sh
 ```
+
+## Web monitor
+
+A Streamlit app opens on History, lets you select any job, create new jobs from Ingest, re-run individual stages, and inspect transcripts plus activity charts. Full jobs run ingest and transcribe together.
+
+```bash
+.venv/bin/pip install -r app/requirements.txt
+app/run.sh
+```
+
+Open `http://<host>:8501/`. Defaults:
+
+- `APP_HOST=0.0.0.0`
+- `APP_PORT=8501`
+
+Set `APP_HOST=127.0.0.1` to restrict access to this machine. There is no
+authentication: anyone who can reach the server can run stages and handoffs.
 
 ## Required local assets
 

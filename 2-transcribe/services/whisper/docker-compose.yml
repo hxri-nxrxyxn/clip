@@ -14,4 +14,7 @@ services:
       AUDIO: ${AUDIO:-/work/input/audio16k_full.wav}
       MODEL_DIR: /models
       WHISPER_MODEL: ${WHISPER_MODEL:-large-v3-turbo}
+      WHISPER_MODEL_REVISION: ${WHISPER_MODEL_REVISION:-0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf}
+      WHISPER_SEED: ${WHISPER_SEED:-1234}
+      WHISPER_LOCAL_FILES_ONLY: ${WHISPER_LOCAL_FILES_ONLY:-0}
     command: python3 /app/transcribe.py

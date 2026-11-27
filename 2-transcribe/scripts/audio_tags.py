@@ -1,6 +1,7 @@
 import csv
 import json
 import math
+import sys
 import wave
 from pathlib import Path
 
@@ -9,24 +10,36 @@ from ai_edge_litert.interpreter import Interpreter
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 STAGE = SCRIPT_DIR.parent
+ROOT = STAGE.parent
 OUT = STAGE / "output"
 
-AUDIO = OUT / "audio" / "audio16k.wav"
-MODEL = STAGE / "services" / "yamnet" / "yamnet.tflite"
-CLASS_MAP = STAGE / "services" / "yamnet" / "yamnet_class_map.csv"
-SAMPLE_RATE = 16000
-WIN = 16000
-HOP = 8000
-YAMNET_SAMPLES = 15600
-TAG_MEMBERSHIP = 0.20
-PEAK_FLOOR = 0.35
-LOUD_DB = 6.0
-MUSIC_INDEX = 132
+sys.path.insert(0, str(ROOT / "app"))
+import config
 
-GROUPS = {
+AUDIO = OUT / "audio" / "audio16k.wav"
+MODEL = config.path("yamnet", "model") or STAGE / "services" / "yamnet" / "yamnet.tflite"
+CLASS_MAP = config.path("yamnet", "class_map") or STAGE / "services" / "yamnet" / "yamnet_class_map.csv"
+SAMPLE_RATE = int(config.get("yamnet", "sample_rate", 16000))
+WIN = int(config.get("yamnet", "window", 16000))
+HOP = int(config.get("yamnet", "hop", 8000))
+YAMNET_SAMPLES = int(config.get("yamnet", "yamnet_samples", 15600))
+TAG_MEMBERSHIP = float(config.get("yamnet", "tag_membership", 0.20))
+PEAK_FLOOR = float(config.get("yamnet", "peak_floor", 0.35))
+LOUD_DB = float(config.get("yamnet", "loud_db", 6.0))
+MUSIC_THRESHOLD = float(config.get("yamnet", "music_threshold", 0.5))
+MUSIC_INDEX = int(config.get("yamnet", "music_index", 132))
+TRIGGER_GROUPS = tuple(
+    config.get("yamnet", "trigger_groups", ["LAUGHTER", "SCREAMING", "SHOUTING"])
+)
+TRIGGER_NEEDLES = {
     "LAUGHTER": ("laughter",),
     "SCREAMING": ("screaming",),
     "SHOUTING": ("shout",),
+}
+GROUPS = {
+    group: TRIGGER_NEEDLES[group]
+    for group in TRIGGER_GROUPS
+    if group in TRIGGER_NEEDLES
 }
 
 
@@ -119,7 +132,9 @@ def main():
                 "tag_membership": TAG_MEMBERSHIP,
                 "peak_floor": PEAK_FLOOR,
                 "loud_db_threshold": LOUD_DB,
+                "music_threshold": MUSIC_THRESHOLD,
                 "music_index": MUSIC_INDEX,
+                "trigger_groups": list(TRIGGER_GROUPS),
                 "windows": windows,
             },
             fh,
