@@ -16,6 +16,7 @@ from ai_edge_litert.interpreter import Interpreter
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import config
+import audio_utils
 import llm_select
 import pipeline
 
@@ -42,45 +43,11 @@ TRIGGER_NEEDLES = {
     "SHOUTING": ("shout",),
 }
 
-
-def clock(seconds):
-    total = max(0, int(round(seconds)))
-    return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
-
-
-def read_wav(path):
-    with wave.open(str(path), "rb") as fh:
-        if fh.getnchannels() != 1 or fh.getframerate() != SAMPLE_RATE:
-            raise ValueError("expected 16 kHz mono wav")
-        if fh.getsampwidth() != 2:
-            raise ValueError("expected 16-bit PCM wav")
-        raw = fh.readframes(fh.getnframes())
-    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-
-
-def wav_duration(path):
-    with wave.open(str(path), "rb") as fh:
-        return fh.getnframes() / fh.getframerate()
-
-
-def load_classes():
-    with open(YAMNET_CLASS_MAP, newline="", encoding="utf-8") as fh:
-        return list(csv.DictReader(fh))
-
-
-def group_indices(rows):
-    groups = {group: [] for group in TRIGGER_GROUPS}
-    for row in rows:
-        name = row["display_name"].lower()
-        for group in TRIGGER_GROUPS:
-            if any(needle in name for needle in TRIGGER_NEEDLES.get(group, ())):
-                groups[group].append(int(row["index"]))
-    return groups
-
-
-def rms_db(samples):
-    rms = float(np.sqrt(np.mean(np.square(samples), dtype=np.float64)))
-    return 20.0 * math.log10(max(rms, 1e-9))
+read_wav = audio_utils.read_wav
+wav_duration = audio_utils.wav_duration
+load_classes = lambda: audio_utils.load_classes(YAMNET_CLASS_MAP)
+group_indices = lambda rows: audio_utils.group_indices(rows, TRIGGER_GROUPS, TRIGGER_NEEDLES)
+rms_db = audio_utils.rms_db
 
 
 def run_yamnet(audio_path, out_path):

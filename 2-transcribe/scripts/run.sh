@@ -17,7 +17,8 @@ INPUT_DIR="$STAGE/input/$RUN_ID"
 OUTPUT_DIR="$STAGE/output/$RUN_ID"
 mkdir -p "$INPUT_DIR" "$OUTPUT_DIR/audio"
 
-eval "$("$PY" "$ROOT/app/config.py" --env)"
+WHISPER_LOG_PROB_THRESHOLD="$("$PY" "$ROOT/app/config.py" --get whisper.log_prob_threshold)"
+
 DC=(docker compose -f "$STAGE/services/whisper/docker-compose.yml" run --rm -T
     -w "/work/output/$RUN_ID"
     -e "AUDIO=/work/input/$RUN_ID/audio16k_full.wav")

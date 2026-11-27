@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-HOST="${APP_HOST:-0.0.0.0}"
+HOST="${APP_HOST:-127.0.0.1}"
 PORT="${APP_PORT:-8501}"
 
 cd "$ROOT"

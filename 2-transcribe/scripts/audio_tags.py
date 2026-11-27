@@ -22,6 +22,7 @@ if not RUN_ID:
 OUT = STAGE / "output" / RUN_ID if RUN_ID else STAGE / "output"
 
 sys.path.insert(0, str(ROOT / "app"))
+import audio_utils
 import config
 
 AUDIO = OUT / "audio" / "audio16k.wav"
@@ -44,44 +45,14 @@ TRIGGER_NEEDLES = {
     "SCREAMING": ("screaming",),
     "SHOUTING": ("shout",),
 }
-GROUPS = {
-    group: TRIGGER_NEEDLES[group]
-    for group in TRIGGER_GROUPS
-    if group in TRIGGER_NEEDLES
-}
 
-
-def read_wav(path):
-    with wave.open(str(path), "rb") as fh:
-        if fh.getnchannels() != 1 or fh.getframerate() != SAMPLE_RATE:
-            raise ValueError("expected 16 kHz mono wav")
-        raw = fh.readframes(fh.getnframes())
-    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-
-
-def load_classes(path):
-    rows = []
-    with open(path, newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            rows.append(row)
-    return rows
+read_wav = audio_utils.read_wav
+load_classes = audio_utils.load_classes
+rms_db = audio_utils.rms_db
 
 
 def group_indices(rows):
-    out = {}
-    for group, needles in GROUPS.items():
-        idx = []
-        for row in rows:
-            name = row["display_name"].lower()
-            if any(n in name for n in needles):
-                idx.append(int(row["index"]))
-        out[group] = idx
-    return out
-
-
-def rms_db(samples):
-    rms = float(np.sqrt(np.mean(np.square(samples), dtype=np.float64)))
-    return 20.0 * math.log10(max(rms, 1e-9))
+    return audio_utils.group_indices(rows, TRIGGER_GROUPS, TRIGGER_NEEDLES)
 
 
 def main():

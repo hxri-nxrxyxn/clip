@@ -1,201 +1,91 @@
 import json
-import math
 import os
-import re
 import shutil
 import subprocess
-import threading
-import time
+import sys
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
-import config
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import analytics
+import jobs
+import stages
+import storage
 
-APP_DIR = Path(__file__).resolve().parent
-ROOT = APP_DIR.parent
-RUNS_DIR = APP_DIR / "runs"
-HISTORY_DIR = APP_DIR / "history"
-CURRENT_JOB_PATH = APP_DIR / "current_job.json"
-INGEST_OUTPUT = ROOT / "1-ingest" / "output"
-CURRENT_RUN_POINTER = INGEST_OUTPUT / "current_run_id"
-STAGE_IDS = ["1-ingest", "2-transcribe", "3-select", "4-reframe", "5-caption", "6-export"]
+# Re-export core references
+APP_DIR = storage.APP_DIR
+ROOT = storage.ROOT
+RUNS_DIR = jobs.RUNS_DIR
+HISTORY_DIR = storage.HISTORY_DIR
+CURRENT_JOB_PATH = storage.CURRENT_JOB_PATH
+INGEST_OUTPUT = storage.INGEST_OUTPUT
+CURRENT_RUN_POINTER = storage.CURRENT_RUN_POINTER
+STAGE_IDS = stages.STAGE_IDS
+STAGES = stages.STAGES
+TRANSCRIBE_FILES = storage.TRANSCRIBE_FILES
+TARGETED_DIR = storage.TARGETED_DIR
+JOBS = jobs.JOBS
+Jobs = jobs.Jobs
 
-STAGES = {
-    "1-ingest": {
-        "number": 1,
-        "title": "Ingest",
-        "description": "Download audio with yt-dlp and normalize it to 16 kHz mono WAV.",
-        "command": ["bash", "1-ingest/scripts/run.sh"],
-        "url": True,
-        "required": [],
-        "handoffs": [
-            (
-                "2-transcribe",
-                "Send to Transcribe",
-                [
-                    (
-                        "1-ingest/output/audio/audio16k_full.wav",
-                        "2-transcribe/input/audio16k_full.wav",
-                    )
-                ],
-            )
-        ],
-        "previews": [("Ingest manifest", "1-ingest/output/ingest.json", "json")],
-    },
-    "2-transcribe": {
-        "number": 2,
-        "title": "Transcribe",
-        "description": "Run Whisper, trim the outro, tag audio with YAMNet, and write timestamped and tagged transcripts.",
-        "command": ["bash", "2-transcribe/scripts/run.sh"],
-        "url": False,
-        "required": ["2-transcribe/input/audio16k_full.wav"],
-        "handoffs": [
-            (
-                "3-select",
-                "Send to Select",
-                [("2-transcribe/output/audio/audio16k.wav", "3-select/input/audio16k.wav")],
-            )
-        ],
-        "previews": [
-            ("Timestamped transcript", "2-transcribe/output/transcript.txt", "text"),
-            ("Tagged transcript", "2-transcribe/output/transcript_with_audio_tags.txt", "text"),
-            ("Tagged WebVTT", "2-transcribe/output/transcript_with_audio_tags.vtt", "text"),
-        ],
-    },
-    "3-select": {
-        "number": 3,
-        "title": "Select",
-        "description": "Highlight selection. This stage is a scaffold.",
-        "command": None,
-        "url": False,
-        "required": [],
-        "handoffs": [],
-        "previews": [],
-    },
-    "4-reframe": {
-        "number": 4,
-        "title": "Reframe",
-        "description": "Reframe selected clips. This stage is a scaffold.",
-        "command": None,
-        "url": False,
-        "required": [],
-        "handoffs": [],
-        "previews": [],
-    },
-    "5-caption": {
-        "number": 5,
-        "title": "Caption",
-        "description": "Render captions onto video. This stage is a scaffold.",
-        "command": None,
-        "url": False,
-        "required": [],
-        "handoffs": [],
-        "previews": [],
-    },
-    "6-export": {
-        "number": 6,
-        "title": "Export",
-        "description": "Final packaging. This stage is a scaffold.",
-        "command": None,
-        "url": False,
-        "required": [],
-        "handoffs": [],
-        "previews": [],
-    },
-}
+# Re-export storage and time helpers
+now_iso = storage.now_iso
+parse_iso = storage.parse_iso
+read_json_path = storage.read_json_path
+read_json = storage.read_json
+slug = storage.slug
+stage_output_dir = storage.stage_output_dir
+stage_input_dir = storage.stage_input_dir
+write_current_run_pointer = storage.write_current_run_pointer
+read_current_run_pointer = storage.read_current_run_pointer
+current_job = storage.current_job
+set_current_job = storage.set_current_job
+mark_current_run = storage.mark_current_run
+update_current_job = storage.update_current_job
+clear_current_job = storage.clear_current_job
+run_id_for_ingest = storage.run_id_for_ingest
+resolve_run_id = storage.resolve_run_id
+current_run_id = storage.current_run_id
+ingest_for_run = storage.ingest_for_run
+current_since = storage.current_since
+file_after = storage.file_after
+line_count_path = storage.line_count_path
+transcribe_summary_from_path = storage.transcribe_summary_from_path
+archive_files = storage.archive_files
+archive_current_run = storage.archive_current_run
+history = storage.history
+
+# Re-export stage and preview helpers
+file_info = stages.file_info
+scan = stages.scan
+line_count = stages.line_count
+preview = stages.preview
+outputs = stages.outputs
+inputs = stages.inputs
+status = stages.status
+
+# Re-export analytics
+clock = analytics.clock
 
 
-def now_iso(value=None):
-    value = value or time.time()
-    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
-
-
-def file_info(relpath):
-    path = ROOT / relpath
-    if not path.is_file():
-        return {"path": relpath, "name": path.name, "exists": False, "size": 0, "mtime": None}
-    stat = path.stat()
-    return {
-        "path": relpath,
-        "name": path.name,
-        "exists": True,
-        "size": stat.st_size,
-        "mtime": now_iso(stat.st_mtime),
-    }
-
-
-def scan(directory):
-    base = ROOT / directory
-    if not base.is_dir():
-        return []
-    return [
-        file_info(path.relative_to(ROOT).as_posix())
-        for path in sorted(base.rglob("*"))
-        if path.is_file() and path.name != ".gitkeep"
-    ]
-
-
-def read_json_path(path):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
-        return None
-
-
-def read_json(relpath):
-    return read_json_path(ROOT / relpath)
-
-
-def parse_iso(value):
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def current_since(run_id=None):
-    ingest = ingest_for_run(run_id)
-    return ingest.get("created_at")
-
-
-def slug(value):
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value)).strip("-")
-    return cleaned[:80] or "run"
-
-
-def file_after(mtime, since):
-    if not since or not mtime:
-        return True
-    stamp = parse_iso(mtime)
-    threshold = parse_iso(since)
-    if not stamp or not threshold:
-        return True
-    return stamp.timestamp() >= threshold.timestamp() - 2
-
-
-def line_count(relpath):
-    try:
-        with open(ROOT / relpath, encoding="utf-8") as fh:
-            return sum(1 for _ in fh)
-    except OSError:
-        return 0
-
-
-def preview(relpath, kind, max_lines=40):
-    if not (ROOT / relpath).exists():
-        return ""
-    if kind == "json":
-        data = read_json(relpath)
-        return json.dumps(data, indent=1) if data is not None else ""
-    try:
-        with open(ROOT / relpath, encoding="utf-8", errors="replace") as fh:
-            return "".join(line for _, line in zip(range(max_lines), fh))
-    except OSError:
-        return ""
+def activity(bin_seconds=10, base=None):
+    if base is None:
+        run_id = resolve_run_id()
+        base_path = (
+            stage_output_dir("2-transcribe", run_id)
+            if run_id
+            else ROOT / "2-transcribe" / "output"
+        )
+        if not (base_path / "audio_tags.json").is_file():
+            legacy = ROOT / "2-transcribe" / "output"
+            info = file_info("2-transcribe/output/audio_tags.json")
+            if not info["exists"] or not file_after(info["mtime"], current_since()):
+                return None
+            base_path = legacy
+    else:
+        base_path = Path(base)
+    meta = read_json_path(base_path / "audio_tags.json")
+    words = read_json_path(base_path / "whisper_words.json") or []
+    return analytics.calculate_activity(meta, words, bin_seconds)
 
 
 def summary(stage_id, run_id=None):
@@ -213,19 +103,11 @@ def summary(stage_id, run_id=None):
         if run_id and stage_output_dir("2-transcribe", run_id).is_dir():
             return transcribe_summary_from_path(stage_output_dir("2-transcribe", run_id))
         since = current_since()
-
-        def current_json(relpath):
-            info = file_info(relpath)
-            if not info["exists"] or not file_after(info["mtime"], since):
-                return None
-            return read_json(relpath)
-
-        words = current_json("2-transcribe/output/whisper_words.json")
-        segments = current_json("2-transcribe/output/whisper_segments.json")
-        tags = current_json("2-transcribe/output/audio_tags.json")
-        manifest = current_json("2-transcribe/output/run_manifest.json") or {}
+        words = read_json("2-transcribe/output/whisper_words.json")
+        segments = read_json("2-transcribe/output/whisper_segments.json")
+        tags = read_json("2-transcribe/output/audio_tags.json")
+        manifest = read_json("2-transcribe/output/run_manifest.json") or {}
         transcript_info = file_info("2-transcribe/output/transcript.txt")
-        tagged_info = file_info("2-transcribe/output/transcript_with_audio_tags.txt")
         vtt_info = file_info("2-transcribe/output/transcript_with_audio_tags.vtt")
         tag_info = file_info("2-transcribe/output/audio_tags.json")
         if not any(
@@ -242,7 +124,7 @@ def summary(stage_id, run_id=None):
             "segments": len(segments) if isinstance(segments, list) else 0,
             "tags": len(tags.get("windows", [])) if isinstance(tags, dict) else 0,
             "transcript_lines": line_count("2-transcribe/output/transcript.txt") if file_after(transcript_info["mtime"], since) else 0,
-            "tagged_lines": line_count("2-transcribe/output/transcript_with_audio_tags.txt") if file_after(tagged_info["mtime"], since) else 0,
+            "tagged_lines": line_count("2-transcribe/output/transcript_with_audio_tags.txt") if file_after(transcript_info["mtime"], since) else 0,
             "vtt_cues": cues,
         }
         if manifest.get("model"):
@@ -251,126 +133,42 @@ def summary(stage_id, run_id=None):
     return {}
 
 
-def current_job():
-    return read_json_path(CURRENT_JOB_PATH)
-
-
-def stage_output_dir(stage_id, run_id):
-    return ROOT / stage_id / "output" / run_id
-
-
-def stage_input_dir(stage_id, run_id):
-    return ROOT / stage_id / "input" / run_id
-
-
-def write_current_run_pointer(run_id):
-    INGEST_OUTPUT.mkdir(parents=True, exist_ok=True)
-    CURRENT_RUN_POINTER.write_text(str(run_id), encoding="utf-8")
-    return run_id
-
-
-def read_current_run_pointer():
-    try:
-        value = CURRENT_RUN_POINTER.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return value or None
-
-
-def resolve_run_id(run_id=None):
-    if run_id:
-        return str(run_id)
-    marker = current_job() or {}
-    if marker.get("run_id"):
-        return marker["run_id"]
-    pointer = read_current_run_pointer()
-    if pointer:
-        return pointer
-    ingest = read_json("1-ingest/output/ingest.json") or {}
-    if ingest:
-        return run_id_for_ingest(ingest, media())
-    return None
-
-
-def ingest_for_run(run_id=None):
-    resolved = resolve_run_id(run_id)
-    if resolved:
-        data = read_json_path(stage_output_dir("1-ingest", resolved) / "ingest.json")
-        if data:
-            return data
-    return read_json("1-ingest/output/ingest.json") or {}
-
-
-def run_id_for_ingest(ingest, video=None):
-    created = parse_iso(ingest.get("created_at")) or datetime.now(timezone.utc)
-    video_id = (video or {}).get("video_id") or ingest.get("video_id") or "video"
-    return f"{slug(video_id)}-{created.strftime('%Y%m%d-%H%M%S')}"
-
-
-def current_run_id():
-    marker = current_job() or {}
-    if marker.get("run_id"):
-        return marker["run_id"]
-    pointer = read_current_run_pointer()
-    if pointer:
-        return pointer
-    ingest = read_json("1-ingest/output/ingest.json") or {}
-    if not ingest:
-        return None
-    candidate = run_id_for_ingest(ingest, media())
-    if (HISTORY_DIR / candidate / "run.json").exists():
-        return candidate
-    return None
-
-
-def set_current_job(job_id, url, run_id=None):
-    if not run_id:
-        archive_current_run()
-    record = {
-        "job_id": job_id,
-        "url": url,
-        "run_id": run_id,
-        "started_at": now_iso(),
-        "status": "running",
+def overview(stage_id, stage_dict, active_job=None):
+    return {
+        "id": stage_id,
+        "number": stage_dict["number"],
+        "title": stage_dict["title"],
+        "description": stage_dict["description"],
+        "status": status(stage_id, stage_dict, active_job),
+        "ready": all((ROOT / item).exists() for item in stage_dict["required"]),
+        "summary": summary(stage_id),
     }
-    with open(CURRENT_JOB_PATH, "w", encoding="utf-8") as fh:
-        json.dump(record, fh, indent=1)
-    if run_id:
-        write_current_run_pointer(run_id)
-    else:
-        try:
-            CURRENT_RUN_POINTER.unlink()
-        except FileNotFoundError:
-            pass
-    return record
 
 
-def mark_current_run(run_id):
-    record = current_job()
-    if not record:
-        return None
-    record["run_id"] = run_id
-    with open(CURRENT_JOB_PATH, "w", encoding="utf-8") as fh:
-        json.dump(record, fh, indent=1)
-    write_current_run_pointer(run_id)
-    return record
-
-
-def update_current_job(status):
-    record = current_job()
-    if not record:
-        return None
-    record["status"] = status
-    with open(CURRENT_JOB_PATH, "w", encoding="utf-8") as fh:
-        json.dump(record, fh, indent=1)
-    return record
-
-
-def clear_current_job():
-    try:
-        CURRENT_JOB_PATH.unlink()
-    except FileNotFoundError:
-        pass
+def detail(stage_id, stage_dict, job=None):
+    active = job if job and job["status"] == "running" else None
+    data = overview(stage_id, stage_dict, active)
+    data["implemented"] = bool(stage_dict["command"])
+    data["accepts_url"] = stage_dict["url"]
+    data["inputs"] = inputs(stage_id, stage_dict)
+    since = None if stage_id == "1-ingest" else current_since()
+    data["outputs"] = outputs(stage_id, since)
+    data["handoffs"] = [
+        {
+            "to": target,
+            "label": label,
+            "available": all((ROOT / source).exists() for source, _ in files),
+        }
+        for target, label, files in stage_dict["handoffs"]
+    ]
+    data["previews"] = [
+        {"label": label, "text": preview(path, kind)}
+        for label, path, kind in stage_dict["previews"]
+        if (ROOT / path).exists()
+        and (since is None or file_after(file_info(path)["mtime"], since))
+    ]
+    data["job"] = job
+    return data
 
 
 def media(run_id=None):
@@ -407,385 +205,6 @@ def media(run_id=None):
     }
 
 
-def clock(seconds):
-    total = max(0, int(seconds))
-    hours, remainder = divmod(total, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
-
-
-def activity(bin_seconds=10, base=None):
-    if base is None:
-        run_id = resolve_run_id()
-        base_path = (
-            stage_output_dir("2-transcribe", run_id)
-            if run_id
-            else ROOT / "2-transcribe" / "output"
-        )
-        if not (base_path / "audio_tags.json").is_file():
-            legacy = ROOT / "2-transcribe" / "output"
-            info = file_info("2-transcribe/output/audio_tags.json")
-            if not info["exists"] or not file_after(info["mtime"], current_since()):
-                return None
-            base_path = legacy
-    else:
-        base_path = Path(base)
-    meta = read_json_path(base_path / "audio_tags.json")
-    words = read_json_path(base_path / "whisper_words.json") or []
-    if not isinstance(meta, dict) or not meta.get("windows"):
-        return None
-    windows = meta["windows"]
-    duration = float(
-        meta.get("duration_seconds")
-        or max(float(window["end"]) for window in windows)
-    )
-    if duration <= 0:
-        return None
-    bin_seconds = max(1, int(bin_seconds))
-    count = max(1, math.ceil(duration / bin_seconds))
-    bins = []
-    for index in range(count):
-        start = index * bin_seconds
-        bins.append(
-            {
-                "index": index,
-                "start": start,
-                "end": min(start + bin_seconds, duration),
-                "time": clock(start),
-                "windows": 0,
-                "words": 0,
-                "loud": 0,
-                "rel_db": 0.0,
-                "laugh": 0.0,
-                "scream": 0.0,
-                "shout": 0.0,
-                "music": 0.0,
-            }
-        )
-
-    loud_threshold = float(config.get("yamnet", "loud_db", 6.0))
-    for window in windows:
-        center = (float(window["start"]) + float(window["end"])) / 2
-        index = min(int(center // bin_seconds), count - 1)
-        item = bins[index]
-        item["windows"] += 1
-        item["rel_db"] += float(window.get("rel_db", 0.0))
-        scores = window.get("scores") or {}
-        item["laugh"] = max(item["laugh"], float(scores.get("LAUGHTER", 0.0)))
-        item["scream"] = max(item["scream"], float(scores.get("SCREAMING", 0.0)))
-        item["shout"] = max(item["shout"], float(scores.get("SHOUTING", 0.0)))
-        item["music"] = max(item["music"], float(window.get("music", 0.0)))
-        if float(window.get("rel_db", -999.0)) >= loud_threshold:
-            item["loud"] += 1
-
-    for word in words:
-        if not isinstance(word, dict) or "start" not in word:
-            continue
-        index = min(int(float(word["start"]) // bin_seconds), count - 1)
-        bins[index]["words"] += 1
-
-    for item in bins:
-        windows_in_bin = item["windows"] or 1
-        item["rel_db"] = item["rel_db"] / windows_in_bin
-        item["loud"] = item["loud"] / windows_in_bin
-        item["speech"] = item["words"] / bin_seconds
-
-    metrics = [
-        ("Loudness", "rel_db", "minmax"),
-        ("Speech", "speech", "max"),
-        ("Loud", "loud", "fixed"),
-        ("Laughter", "laugh", "fixed"),
-        ("Screaming", "scream", "fixed"),
-        ("Shouting", "shout", "fixed"),
-        ("Music", "music", "fixed"),
-    ]
-    heatmap = []
-    for label, key, mode in metrics:
-        values = [float(item[key]) for item in bins]
-        if mode == "minmax":
-            low, high = min(values), max(values)
-            span = high - low if high > low else 1.0
-            normalized = [(value - low) / span for value in values]
-        elif mode == "max":
-            high = max(values) or 1.0
-            normalized = [value / high for value in values]
-        else:
-            normalized = [max(0.0, min(1.0, value)) for value in values]
-        for item, value in zip(bins, normalized):
-            heatmap.append(
-                {
-                    "time": item["time"],
-                    "index": item["index"],
-                    "metric": label,
-                    "value": round(float(value), 4),
-                    "raw": round(float(item[key]), 3),
-                }
-            )
-
-    minute_count = max(1, math.ceil(duration / 60.0))
-    minutes = []
-    for index in range(minute_count):
-        start = index * 60.0
-        end = min(start + 60.0, duration)
-        selected = [item for item in bins if item["start"] < end and item["end"] > start]
-        weighted = [item for item in selected if item["windows"]]
-        rel_db = (
-            sum(item["rel_db"] * item["windows"] for item in weighted)
-            / sum(item["windows"] for item in weighted)
-            if weighted
-            else 0.0
-        )
-        minutes.append(
-            {
-                "time": clock(start),
-                "start": start,
-                "words": sum(item["words"] for item in selected),
-                "loud": round(sum(item["loud"] for item in selected), 2),
-                "laugh": round(max((item["laugh"] for item in selected), default=0.0), 3),
-                "scream": round(max((item["scream"] for item in selected), default=0.0), 3),
-                "shout": round(max((item["shout"] for item in selected), default=0.0), 3),
-                "music": round(max((item["music"] for item in selected), default=0.0), 3),
-                "rel_db": round(rel_db, 2),
-            }
-        )
-    max_words = max((item["words"] for item in minutes), default=0) or 1
-    max_loud = max((item["loud"] for item in minutes), default=0) or 1
-    for item in minutes:
-        item["activity"] = round(
-            item["words"] / max_words
-            + item["loud"] / max_loud
-            + max(item["laugh"], item["scream"], item["shout"])
-            + item["music"],
-            3,
-        )
-
-    tag_membership = float(config.get("yamnet", "tag_membership", 0.2))
-    totals = {
-        "duration": round(duration, 1),
-        "words": len(words),
-        "loud_windows": sum(
-            1
-            for window in windows
-            if float(window.get("rel_db", -999.0)) >= loud_threshold
-        ),
-        "laughter_windows": sum(
-            1
-            for window in windows
-            if float((window.get("scores") or {}).get("LAUGHTER", 0.0)) >= tag_membership
-        ),
-        "screaming_windows": sum(
-            1
-            for window in windows
-            if float((window.get("scores") or {}).get("SCREAMING", 0.0)) >= tag_membership
-        ),
-        "shouting_windows": sum(
-            1
-            for window in windows
-            if float((window.get("scores") or {}).get("SHOUTING", 0.0)) >= tag_membership
-        ),
-        "music_windows": sum(
-            1
-            for window in windows
-            if float(window.get("music", 0.0)) >= 0.5
-        ),
-    }
-    return {
-        "duration": round(duration, 1),
-        "bin_seconds": bin_seconds,
-        "bins": bins,
-        "heatmap": heatmap,
-        "minutes": minutes,
-        "totals": totals,
-    }
-
-
-def outputs(stage_id, since=None, run_id=None):
-    run_id = resolve_run_id(run_id)
-    base = Path(stage_id) / "output"
-    source = base / run_id if run_id and (ROOT / base / run_id).is_dir() else base
-    items = []
-    for item in scan(source.as_posix()):
-        if since and not file_after(item["mtime"], since):
-            continue
-        relative = Path(item["path"]).relative_to(base)
-        if relative.parts and relative.parts[0] == TARGETED_DIR:
-            continue
-        item["url"] = f"/files/{stage_id}/{relative.as_posix()}"
-        items.append(item)
-    return items
-
-
-def inputs(stage_id, stage, run_id=None):
-    run_id = resolve_run_id(run_id)
-    base = Path(stage_id) / "input"
-    source = base / run_id if run_id and (ROOT / base / run_id).is_dir() else base
-    items = scan(source.as_posix())
-    required_names = {Path(item).name for item in stage["required"]}
-    for item in items:
-        item["required"] = Path(item["path"]).name in required_names
-    return items
-
-
-def status(stage_id, stage, active_job=None):
-    if not stage["command"]:
-        return "scaffold"
-    if active_job and active_job["stage"] == stage_id and active_job["status"] == "running":
-        return "running"
-    since = None if stage_id == "1-ingest" else current_since()
-    if outputs(stage_id, since):
-        return "complete"
-    return "ready" if all((ROOT / item).exists() for item in stage["required"]) else "blocked"
-
-
-def overview(stage_id, stage, active_job=None):
-    return {
-        "id": stage_id,
-        "number": stage["number"],
-        "title": stage["title"],
-        "description": stage["description"],
-        "status": status(stage_id, stage, active_job),
-        "ready": all((ROOT / item).exists() for item in stage["required"]),
-        "summary": summary(stage_id),
-    }
-
-
-def detail(stage_id, stage, job=None):
-    active = job if job and job["status"] == "running" else None
-    data = overview(stage_id, stage, active)
-    data["implemented"] = bool(stage["command"])
-    data["accepts_url"] = stage["url"]
-    data["inputs"] = inputs(stage_id, stage)
-    since = None if stage_id == "1-ingest" else current_since()
-    data["outputs"] = outputs(stage_id, since)
-    data["handoffs"] = [
-        {
-            "to": target,
-            "label": label,
-            "available": all((ROOT / source).exists() for source, _ in files),
-        }
-        for target, label, files in stage["handoffs"]
-    ]
-    data["previews"] = [
-        {"label": label, "text": preview(path, kind)}
-        for label, path, kind in stage["previews"]
-        if (ROOT / path).exists()
-        and (since is None or file_after(file_info(path)["mtime"], since))
-    ]
-    data["job"] = job
-    return data
-
-
-def archive_current_run(run_id=None):
-    if not run_id:
-        marker = current_job() or {}
-        marker_run = marker.get("run_id")
-        if marker_run and (HISTORY_DIR / marker_run / "run.json").is_file():
-            return marker_run
-    run_id = resolve_run_id(run_id)
-    if not run_id:
-        return None
-    if (HISTORY_DIR / run_id / "run.json").is_file():
-        return run_id
-    ingest = ingest_for_run(run_id)
-    if not ingest:
-        return None
-    since = ingest.get("created_at")
-    current_outputs = outputs("2-transcribe", since, run_id=run_id)
-    if not current_outputs:
-        return None
-    media_data = media(run_id)
-    destination = HISTORY_DIR / run_id
-    temporary = HISTORY_DIR / f".{run_id}.tmp"
-    if temporary.exists():
-        shutil.rmtree(temporary)
-    temporary.mkdir(parents=True, exist_ok=True)
-    ingest_source = stage_output_dir("1-ingest", run_id) / "ingest.json"
-    if not ingest_source.is_file():
-        ingest_source = ROOT / "1-ingest" / "output" / "ingest.json"
-    source_paths = [ingest_source]
-    source_paths.extend(ROOT / item["path"] for item in current_outputs)
-    files = []
-    seen = set()
-    skip_suffixes = {".wav", ".mp3", ".opus", ".webm", ".m4a", ".mp4"}
-    for source in source_paths:
-        if not source.is_file() or source.name in seen:
-            continue
-        if source.suffix.lower() in skip_suffixes:
-            continue
-        target = temporary / source.name
-        shutil.copy2(source, target)
-        seen.add(source.name)
-        files.append(
-            {
-                "name": source.name,
-                "source": source.relative_to(ROOT).as_posix(),
-                "size": target.stat().st_size,
-                "mtime": now_iso(target.stat().st_mtime),
-            }
-        )
-    audio_name = None
-    for candidate in (
-        stage_input_dir("2-transcribe", run_id) / "audio16k_full.wav",
-        stage_output_dir("1-ingest", run_id) / "audio" / "audio16k_full.wav",
-        ROOT / "2-transcribe" / "input" / "audio16k_full.wav",
-        ROOT / "1-ingest" / "output" / "audio" / "audio16k_full.wav",
-    ):
-        if not candidate.is_file():
-            continue
-        target = temporary / "audio16k_full.wav"
-        shutil.copy2(candidate, target)
-        audio_name = "audio16k_full.wav"
-        files.append(
-            {
-                "name": audio_name,
-                "source": candidate.relative_to(ROOT).as_posix(),
-                "size": target.stat().st_size,
-                "mtime": now_iso(target.stat().st_mtime),
-            }
-        )
-        break
-    record = {
-        "run_id": run_id,
-        "video": media_data,
-        "ingest": ingest,
-        "summary": summary("2-transcribe", run_id),
-        "files": files,
-        "audio": audio_name,
-        "archived_at": now_iso(),
-        "updated_at": now_iso(),
-    }
-    with open(temporary / "run.json", "w", encoding="utf-8") as fh:
-        json.dump(record, fh, indent=1)
-    if destination.exists():
-        shutil.rmtree(destination)
-    temporary.rename(destination)
-    write_current_run_pointer(run_id)
-    return run_id
-
-
-def history():
-    if not HISTORY_DIR.is_dir():
-        return []
-    current = current_run_id()
-    entries = []
-    for path in sorted(HISTORY_DIR.iterdir(), reverse=True):
-        if not path.is_dir():
-            continue
-        record = read_json_path(path / "run.json")
-        if not record:
-            continue
-        if current and record.get("run_id") == current:
-            continue
-        record["path"] = str(path)
-        entries.append(record)
-    entries.sort(
-        key=lambda item: item.get("updated_at") or item.get("archived_at") or "",
-        reverse=True,
-    )
-    return entries
-
 def history_detail(run_id):
     path = (HISTORY_DIR / run_id).resolve()
     root = HISTORY_DIR.resolve()
@@ -817,78 +236,6 @@ def history_detail(run_id):
     return record
 
 
-TRANSCRIBE_FILES = [
-    "transcript.txt",
-    "whisper_transcript.txt",
-    "whisper_words.json",
-    "whisper_segments.json",
-    "audio_tags.json",
-    "metadata.json",
-    "run_manifest.json",
-    "vad.json",
-    "transcript_with_audio_tags.txt",
-    "transcript_with_audio_tags.vtt",
-    "transcript_with_audio_tags.json",
-    "whisper_words_clean.json",
-]
-
-TARGETED_DIR = "targeted"
-TARGETED_FILES = [
-    "audio_tags.json",
-    "candidates.json",
-    "targeted_segments.json",
-    "targeted_words.json",
-    "targeted_transcript.txt",
-    "targeted_with_events.json",
-    "targeted_with_events.txt",
-    "selection.json",
-    "timings.json",
-]
-
-
-def line_count_path(path):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return sum(1 for _ in fh)
-    except OSError:
-        return 0
-
-
-def transcribe_summary_from_path(path):
-    words = read_json_path(path / "whisper_words.json")
-    segments = read_json_path(path / "whisper_segments.json")
-    tags = read_json_path(path / "audio_tags.json")
-    manifest = read_json_path(path / "run_manifest.json") or {}
-    vtt = path / "transcript_with_audio_tags.vtt"
-    cues = 0
-    if vtt.is_file():
-        with open(vtt, encoding="utf-8", errors="replace") as fh:
-            cues = sum(1 for line in fh if "-->" in line)
-    data = {
-        "words": len(words) if isinstance(words, list) else 0,
-        "segments": len(segments) if isinstance(segments, list) else 0,
-        "tags": len(tags.get("windows", [])) if isinstance(tags, dict) else 0,
-        "transcript_lines": line_count_path(path / "transcript.txt"),
-        "tagged_lines": line_count_path(path / "transcript_with_audio_tags.txt"),
-        "vtt_cues": cues,
-    }
-    if manifest.get("model"):
-        data["model"] = manifest["model"]
-    return data
-
-
-def archive_files(path):
-    return [
-        {
-            "name": child.name,
-            "size": child.stat().st_size,
-            "mtime": now_iso(child.stat().st_mtime),
-        }
-        for child in sorted(path.iterdir())
-        if child.is_file() and child.name != "run.json"
-    ]
-
-
 def job_label(record):
     video = record.get("video") or {}
     title = video.get("title") or video.get("url") or record.get("run_id") or "Job"
@@ -896,9 +243,9 @@ def job_label(record):
     stamp = record.get("updated_at") or record.get("archived_at")
     when = parse_iso(stamp)
     date = when.strftime("%Y-%m-%d %H:%M") if when else ""
-    status = record.get("status")
-    if status in ("running", "failed"):
-        suffix = status
+    job_status = record.get("status")
+    if job_status in ("running", "failed"):
+        suffix = job_status
     elif record.get("is_current"):
         suffix = "current"
     else:
@@ -906,7 +253,7 @@ def job_label(record):
     return f"{title} · {duration} · {date} · {suffix}"
 
 
-def jobs():
+def jobs_list():
     archives = []
     if HISTORY_DIR.is_dir():
         for path in HISTORY_DIR.iterdir():
@@ -923,7 +270,6 @@ def jobs():
     )
     current = current_run_id()
     marker = current_job() or {}
-    marker_run = marker.get("run_id")
     marker_job = marker.get("job_id")
     result = []
     has_current_archive = any(record.get("run_id") == current for record in archives)
@@ -955,12 +301,15 @@ def jobs():
         item["id"] = item.get("run_id")
         item["is_current"] = item.get("run_id") == current
         if item["is_current"]:
-            status = (current_job() or {}).get("status")
-            if status:
-                item["status"] = status
+            status_val = (current_job() or {}).get("status")
+            if status_val:
+                item["status"] = status_val
         item["label"] = job_label(item)
         result.append(item)
     return result
+
+
+jobs = jobs_list
 
 
 def job_detail(job_id):
@@ -1191,107 +540,6 @@ def run_targeted_archive(run_id, extra_args=None):
     if result.returncode != 0:
         raise RuntimeError(f"targeted job failed for {run_id}")
     return targeted_detail(run_id)
-
-
-class Jobs:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.jobs = {}
-        self.processes = {}
-        self.active = None
-
-    def tail(self, path, max_bytes=20000, max_lines=200):
-        try:
-            with open(path, "rb") as fh:
-                fh.seek(0, os.SEEK_END)
-                size = fh.tell()
-                fh.seek(max(0, size - max_bytes))
-                text = fh.read().decode("utf-8", "replace")
-            return "\n".join(text.splitlines()[-max_lines:])
-        except OSError:
-            return ""
-
-    def public(self, job):
-        end = job["ended"] or time.time()
-        return {
-            "id": job["id"],
-            "stage": job["stage"],
-            "status": job["status"],
-            "returncode": job["returncode"],
-            "elapsed": round(end - job["started"], 1),
-            "log_tail": self.tail(job["log_path"]),
-        }
-
-    def start(self, stage_id, argv):
-        with self.lock:
-            if self.active and self.jobs[self.active]["status"] == "running":
-                raise RuntimeError("another job is already running")
-            job_id = uuid.uuid4().hex[:12]
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            log_path = RUNS_DIR / f"{stamp}-{stage_id}-{job_id}.log"
-            log_file = open(log_path, "w", encoding="utf-8", errors="replace")
-            env = os.environ.copy()
-            env["PYTHONUNBUFFERED"] = "1"
-            try:
-                process = subprocess.Popen(
-                    argv,
-                    cwd=str(ROOT),
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    start_new_session=True,
-                    env=env,
-                )
-            finally:
-                log_file.close()
-            job = {
-                "id": job_id,
-                "stage": stage_id,
-                "status": "running",
-                "started": time.time(),
-                "ended": None,
-                "returncode": None,
-                "log_path": str(log_path),
-            }
-            self.jobs[job_id] = job
-            self.processes[job_id] = process
-            self.active = job_id
-            data = self.public(job)
-        threading.Thread(target=self._wait, args=(job_id, process), daemon=True).start()
-        return data
-
-    def _wait(self, job_id, process):
-        returncode = process.wait()
-        with self.lock:
-            job = self.jobs[job_id]
-            job["returncode"] = returncode
-            job["ended"] = time.time()
-            job["status"] = "succeeded" if returncode == 0 else "failed"
-            if self.active == job_id:
-                self.active = None
-            self.processes.pop(job_id, None)
-
-    def get(self, job_id):
-        with self.lock:
-            job = self.jobs.get(job_id)
-            return self.public(job) if job else None
-
-    def latest(self, stage_id):
-        with self.lock:
-            result = None
-            for job in self.jobs.values():
-                if job["stage"] == stage_id:
-                    if result is None or job["started"] > result["started"]:
-                        result = job
-            return self.public(result) if result else None
-
-    def current(self):
-        with self.lock:
-            job = self.jobs.get(self.active) if self.active else None
-            return self.public(job) if job else None
-
-
-JOBS = Jobs()
 
 
 def validate_target(value):
