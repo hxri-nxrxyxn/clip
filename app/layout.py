@@ -3,14 +3,15 @@ import shutil
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+APP_DIR = Path(__file__).resolve().parent
+ROOT = APP_DIR.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(APP_DIR))
 
 import contextlib
 
-import pipeline
-
-APP_DIR = Path(__file__).resolve().parent
-ROOT = pipeline.ROOT
+from app import archive as archive_module
+from app import pipeline
 
 
 def path_size(path):
@@ -69,15 +70,17 @@ def migrate(run_id=None, dry_run=False):
             if child.name in {".gitkeep", resolved}:
                 continue
             moved += move_path(child, transcribe_job / child.name, dry_run)
-    select_job = pipeline.stage_output_dir("3-select", resolved)
-    transcribe_targeted = pipeline.stage_output_dir("2-transcribe", resolved) / "targeted"
-    if transcribe_targeted.is_dir():
-        moved += move_path(transcribe_targeted, select_job, dry_run)
     legacy_targeted = APP_DIR / "prototype" / resolved
     if legacy_targeted.is_dir():
-        moved += move_path(legacy_targeted, select_job, dry_run)
+        moved += move_path(
+            legacy_targeted,
+            pipeline.stage_output_dir("3-select", resolved),
+            dry_run,
+        )
     if not dry_run:
         pipeline.write_current_run_pointer(resolved)
+    if archive_module.split_legacy_targeted(resolved, dry_run=dry_run):
+        print(f"[layout] {'would split' if dry_run else 'split'} legacy targeted archive")
     print(f"[layout] {'would move' if dry_run else 'moved'} {moved / 1024 / 1024:.1f} MB")
     return resolved
 

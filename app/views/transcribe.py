@@ -7,6 +7,7 @@ import streamlit as st
 from app import pipeline
 from app.views._shared import (
     archive_items,
+    files_markdown,
     job_log,
     job_picker,
     job_url,
@@ -14,9 +15,9 @@ from app.views._shared import (
     render_previews,
     render_running_log,
     start_stage_job,
-    start_targeted_job,
+    start_targeted_extract_job,
+    status_badge,
 )
-from app.views.select import render_targeted
 
 
 def chart_axes(chart: alt.Chart) -> alt.Chart:
@@ -140,6 +141,53 @@ def render_activity_charts(data: dict) -> None:
         )
 
 
+def render_targeted_extract(targeted: dict, log_job: dict | None = None) -> None:
+    if not targeted:
+        return
+    status = targeted.get("status")
+    st.subheader(":material/content_cut: Targeted extraction")
+    st.caption(
+        "YAMNet candidate windows are transcribed with offsets. "
+        "Qwen selection happens later in the Select stage."
+    )
+    if status:
+        status_badge(status)
+    if status == "failed":
+        st.error(targeted.get("error") or "Targeted extraction failed.")
+    summary = targeted.get("summary") or {}
+    metrics = [
+        ("candidates", summary.get("candidates", 0)),
+        ("segments", summary.get("segments", 0)),
+        ("words", summary.get("words", 0)),
+        ("whisper", f"{summary.get('targeted_whisper_seconds') or 0:.1f}s"),
+        ("total", f"{summary.get('total_seconds') or 0:.1f}s"),
+    ]
+    for column, (label, value) in zip(st.columns(5), metrics):
+        column.metric(label, value)
+    candidates = targeted.get("candidates") or []
+    if candidates:
+        st.dataframe(
+            [
+                {
+                    "candidate": item.get("id"),
+                    "window start": pipeline.clock(item.get("window_start") or 0),
+                    "window end": pipeline.clock(item.get("window_end") or 0),
+                    "peak score": item.get("peak_score"),
+                    "types": ", ".join(sorted((item.get("types") or {}).keys())),
+                }
+                for item in candidates
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+    render_previews(targeted.get("previews") or [], title="Extraction previews")
+    with st.expander("Extraction files & log", expanded=False):
+        st.markdown(files_markdown(archive_items(targeted.get("files") or [])))
+        if log_job:
+            st.caption("Latest extraction log")
+            st.code(log_job["log_tail"][-4000:] or "No output.", language="text")
+
+
 def render() -> None:
     job = job_picker()
     if render_running_log():
@@ -177,34 +225,27 @@ def render() -> None:
     files = detail.get("files") or []
     audio = [item for item in files if item.get("name") == "audio16k_full.wav"]
     busy = pipeline.JOBS.current() is not None
-    targeted_mode = st.toggle(
-        "Targeted transcribe (YAMNet + Qwen)",
-        value=False,
-        help=(
-            "Find laughter, screaming, and shouting with YAMNet, transcribe only "
-            "those windows, and let Qwen choose the clip boundaries."
-        ),
-    )
-    use_llm = True
-    if targeted_mode:
-        use_llm = st.toggle(
-            "Use Qwen for clip selection",
-            value=True,
-            help="Turn off to use peak-centered clip selection instead.",
-        )
-        st.caption(
-            "Runs on the archived audio. Qwen falls back to peak-centered "
-            "selection if the local server is unavailable."
-        )
-    if st.button(
-        "Run targeted transcribe" if targeted_mode else "Re-run transcribe for this job",
-        icon=":material/hearing:" if targeted_mode else ":material/graphic_eq:",
-        disabled=busy or not audio,
-    ):
-        if targeted_mode:
-            start_targeted_job(job, use_llm=use_llm)
-        else:
+    left, right = st.columns(2)
+    with left:
+        if st.button(
+            "Re-run full transcribe",
+            icon=":material/graphic_eq:",
+            disabled=busy or not audio,
+            width="stretch",
+        ):
             start_stage_job(job, "2-transcribe")
+    with right:
+        if st.button(
+            "Run targeted extraction",
+            icon=":material/content_cut:",
+            disabled=busy or not audio,
+            width="stretch",
+        ):
+            start_targeted_extract_job(job)
+    st.caption(
+        "Targeted extraction transcribes only YAMNet candidate windows. "
+        "Qwen selection runs on the Select page."
+    )
     if not audio:
         st.caption("This job has no archived audio for re-running transcribe.")
 
@@ -217,9 +258,9 @@ def render() -> None:
     render_previews(detail.get("previews") or [], title="Previews")
     targeted = detail.get("targeted")
     if targeted:
-        render_targeted(targeted, log_job=job_log(job, "targeted"))
+        render_targeted_extract(targeted, log_job=job_log(job, "targeted-extract"))
     else:
-        st.caption("No targeted transcription yet.")
+        st.caption("No targeted extraction yet.")
     output_files = [
         item
         for item in files

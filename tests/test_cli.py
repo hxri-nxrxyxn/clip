@@ -13,13 +13,28 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(args.target, "https://example.com/video")
         self.assertEqual(args.func, cli.cmd_run)
 
-    def test_parser_targeted(self):
+    def test_parser_extract(self):
         parser = cli.build_parser()
-        args = parser.parse_args(["targeted", "job-123", "--no-llm", "--limit", "5"])
+        args = parser.parse_args(["extract", "job-123", "--rescan", "--limit", "5"])
+        self.assertEqual(args.run_id, "job-123")
+        self.assertTrue(args.rescan)
+        self.assertEqual(args.limit, 5)
+        self.assertEqual(args.func, cli.cmd_extract)
+
+    def test_parser_select(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["select", "job-123", "--no-llm"])
         self.assertEqual(args.run_id, "job-123")
         self.assertTrue(args.no_llm)
-        self.assertEqual(args.limit, 5)
-        self.assertEqual(args.func, cli.cmd_targeted)
+        self.assertEqual(args.func, cli.cmd_select)
+
+    def test_parser_visual(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["visual", "job-123", "--no-vlm", "--max-clips", "3"])
+        self.assertEqual(args.run_id, "job-123")
+        self.assertTrue(args.no_vlm)
+        self.assertEqual(args.max_clips, 3)
+        self.assertEqual(args.func, cli.cmd_visual)
 
     def test_parser_handoff(self):
         parser = cli.build_parser()

@@ -36,6 +36,46 @@ DEFAULTS = {
         "api_key_file": "",
         "api_key_container": "unsloth",
     },
+    "qwen_server": {
+        "container": "unsloth",
+        "binary": "/opt/unsloth/llama.cpp/llama-server",
+        "host": "0.0.0.0",
+        "port": 54301,
+        "startup_timeout": 300.0,
+        "model": "/workspace/.cache/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-MTP-GGUF/snapshots/5bc3e238d916f48a861bac2f8a1990a0e9b7e98d/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf",
+        "mmproj": "/workspace/.cache/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-MTP-GGUF/snapshots/5bc3e238d916f48a861bac2f8a1990a0e9b7e98d/mmproj-F16.gguf",
+        "api_key_file": "",
+        "extra_args": [
+            "--parallel", "4",
+            "--flash-attn", "on",
+            "--no-context-shift",
+            "-c", "8192",
+            "--ubatch-size", "2048",
+            "--video-fps", "1",
+            "--video-timestamp-interval", "2000",
+            "--video-ffmpeg-dir", "/usr/bin",
+            "--fit", "on",
+            "--metrics",
+            "--slot-save-path", "/opt/unsloth-studio/cache/llama-slots",
+            "--kv-unified",
+            "--jinja",
+            "--verbosity", "4",
+            "--spec-type", "none",
+            "--reasoning", "on",
+            "--ctx-checkpoints", "6",
+            "--load-mode", "none",
+            "--mmproj-offload",
+        ],
+    },
+    "vlm": {
+        "enabled": True,
+        "frames_per_clip": 6,
+        "tile_columns": 3,
+        "tile_width": 480,
+        "max_clips": 6,
+        "timeout": 180.0,
+        "max_tokens": 700,
+    },
     "whisper": {
         "model": "large-v3-turbo",
         "revision": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf",
@@ -146,6 +186,20 @@ def _validate(config):
         raise ValueError("whisper.seed must be >= 0")
     if float(config.get("outro", {}).get("tail_seconds", 0)) < 0:
         raise ValueError("outro.tail_seconds must be >= 0")
+    qwen = config.get("qwen_server", {})
+    if int(qwen.get("port", 0)) <= 0:
+        raise ValueError("qwen_server.port must be > 0")
+    if float(qwen.get("startup_timeout", 0)) <= 0:
+        raise ValueError("qwen_server.startup_timeout must be > 0")
+    vlm = config.get("vlm", {})
+    if int(vlm.get("frames_per_clip", 0)) <= 0:
+        raise ValueError("vlm.frames_per_clip must be > 0")
+    if int(vlm.get("tile_columns", 0)) <= 0:
+        raise ValueError("vlm.tile_columns must be > 0")
+    if int(vlm.get("tile_width", 0)) < 200:
+        raise ValueError("vlm.tile_width must be >= 200")
+    if int(vlm.get("max_clips", 0)) <= 0:
+        raise ValueError("vlm.max_clips must be > 0")
 
 
 def load_config(path=None):

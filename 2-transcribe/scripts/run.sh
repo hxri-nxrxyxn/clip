@@ -10,6 +10,8 @@ RUN_ID="${CLIP_RUN_ID:-$("$PY" "$SCRIPT_DIR/run_context.py")}"
 [[ -n "$RUN_ID" ]] || { echo "[transcribe] ERROR: missing CLIP_RUN_ID" >&2; exit 2; }
 export CLIP_RUN_ID="$RUN_ID"
 
+"$PY" "$ROOT/app/qwen_server.py" stop || true
+
 INPUT_DIR="$STAGE/input/$RUN_ID"
 OUTPUT_DIR="$STAGE/output/$RUN_ID"
 mkdir -p "$INPUT_DIR" "$OUTPUT_DIR/audio"

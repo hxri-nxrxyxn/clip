@@ -27,6 +27,18 @@ class StorageTests(unittest.TestCase):
             "Q9BVIwyUr9k-20261127-080000",
         )
 
+    def test_ingest_for_run_archive_fallback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            hist_dir = Path(temp)
+            run_dir = hist_dir / "run-1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "ingest.json").write_text(
+                '{"title": "Archived"}', encoding="utf-8"
+            )
+            with mock.patch.object(storage, "HISTORY_DIR", hist_dir):
+                data = storage.ingest_for_run("run-1")
+            self.assertEqual(data["title"], "Archived")
+
     def test_stage_paths(self):
         self.assertEqual(
             storage.stage_output_dir("2-transcribe", "job-1"),

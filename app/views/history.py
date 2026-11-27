@@ -12,8 +12,8 @@ from app.views._shared import (
     start_full_job,
     time_label,
 )
-from app.views.select import render_targeted
-from app.views.transcribe import render_activity_charts
+from app.views.select import render_selection, render_visual
+from app.views.transcribe import render_activity_charts, render_targeted_extract
 
 
 def render_history_details(job: dict) -> None:
@@ -38,7 +38,13 @@ def render_history_details(job: dict) -> None:
     render_previews(detail.get("previews") or [], title="Previews")
     targeted = detail.get("targeted")
     if targeted:
-        render_targeted(targeted)
+        render_targeted_extract(targeted)
+    selection = detail.get("selection")
+    if selection:
+        render_selection(selection)
+    visual = detail.get("visual")
+    if visual:
+        render_visual(visual)
     summary = detail.get("summary") or {}
     render_detail_expanders(
         [
@@ -80,6 +86,8 @@ def render() -> None:
                     "words": (entry.get("summary") or {}).get("words", 0),
                     "tagged lines": (entry.get("summary") or {}).get("tagged_lines", 0),
                     "targeted": (entry.get("targeted") or {}).get("status") or "—",
+                    "selection": (entry.get("selection") or {}).get("status") or "—",
+                    "visual": (entry.get("visual") or {}).get("status") or "—",
                 }
                 for entry in entries
             ]

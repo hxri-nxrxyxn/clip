@@ -148,13 +148,13 @@ def _extract_json(text):
     raise ValueError("no JSON object in LLM response")
 
 
-def _chat(base_url, model, api_key, messages, timeout):
+def _chat(base_url, model, api_key, messages, timeout, max_tokens=None):
     url = f"{base_url.rstrip('/')}/v1/chat/completions"
     payload = {
         "model": model,
         "messages": messages,
         "temperature": 0.1,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens or MAX_TOKENS,
         "stream": False,
     }
     if config.get("llm", "disable_thinking", True):
@@ -181,6 +181,27 @@ def _chat(base_url, model, api_key, messages, timeout):
             data = json.loads(response.read().decode("utf-8"))
     message = data["choices"][0]["message"]
     return message.get("content") or message.get("reasoning_content") or ""
+
+
+def chat(
+    base_url,
+    model,
+    api_key,
+    messages,
+    timeout=DEFAULT_TIMEOUT,
+    max_tokens=None,
+):
+    return _chat(
+        base_url,
+        model,
+        api_key,
+        messages,
+        timeout,
+        max_tokens=max_tokens,
+    )
+
+
+extract_json = _extract_json
 
 
 def _snap(start, end, window_start, window_end, words, peak_time):

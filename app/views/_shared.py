@@ -6,7 +6,7 @@ from typing import Any
 
 import streamlit as st
 
-from app import pipeline
+from app import pipeline, qwen_server
 
 STATUS_COLORS = {
     "complete": "green",
@@ -170,6 +170,7 @@ def start_full_job(url: str) -> None:
     except ValueError as exc:
         st.error(str(exc))
         return
+    qwen_server.stop(quiet=True)
     pipeline.archive_current_run()
     try:
         job = pipeline.JOBS.start(
@@ -188,6 +189,8 @@ def start_stage_job(job: dict[str, Any], stage_id: str, url: str | None = None) 
         st.error("Cannot re-run stage without an archived run_id.")
         return
     try:
+        if stage_id == "2-transcribe":
+            qwen_server.stop(quiet=True)
         pipeline.prepare_stage_workspace(run_id, stage_id)
         cmd = ["bash", str(pipeline.APP_DIR / "stage_job.sh"), stage_id, run_id]
         if url:
@@ -200,22 +203,67 @@ def start_stage_job(job: dict[str, Any], stage_id: str, url: str | None = None) 
     st.rerun()
 
 
-def start_targeted_job(job: dict[str, Any], use_llm: bool = True) -> None:
+def start_targeted_extract_job(job: dict[str, Any]) -> None:
     run_id = job.get("run_id")
     if not run_id:
-        st.error("Cannot run targeted selection without an archived run_id.")
+        st.error("Cannot run targeted extraction without an archived run_id.")
+        return
+    qwen_server.stop(quiet=True)
+    try:
+        active = pipeline.JOBS.start(
+            "targeted-extract",
+            [
+                "bash",
+                str(pipeline.ROOT / "2-transcribe" / "scripts" / "targeted_extract.sh"),
+                run_id,
+            ],
+        )
+    except RuntimeError as exc:
+        st.warning(str(exc))
+        return
+    pipeline.start_targeted_extract_run(run_id)
+    pipeline.set_current_job(active["id"], job_url(job), run_id=run_id)
+    st.rerun()
+
+
+def start_selection_job(job: dict[str, Any], use_llm: bool = True) -> None:
+    run_id = job.get("run_id")
+    if not run_id:
+        st.error("Cannot run selection without an archived run_id.")
         return
     args = [run_id]
     if not use_llm:
         args.append("--no-llm")
     try:
         active = pipeline.JOBS.start(
-            "targeted", ["bash", str(pipeline.APP_DIR / "targeted_job.sh"), *args]
+            "3-select",
+            ["bash", str(pipeline.ROOT / "3-select" / "scripts" / "run.sh"), *args],
         )
     except RuntimeError as exc:
         st.warning(str(exc))
         return
-    pipeline.start_targeted_run(run_id)
+    pipeline.start_selection_run(run_id)
+    pipeline.set_current_job(active["id"], job_url(job), run_id=run_id)
+    st.rerun()
+
+
+def start_visual_job(job: dict[str, Any], use_vlm: bool = True) -> None:
+    run_id = job.get("run_id")
+    if not run_id:
+        st.error("Cannot run visual analysis without an archived run_id.")
+        return
+    args = [run_id]
+    if not use_vlm:
+        args.append("--no-vlm")
+    try:
+        active = pipeline.JOBS.start(
+            "visual",
+            ["bash", str(pipeline.ROOT / "3-select" / "scripts" / "visual.sh"), *args],
+        )
+    except RuntimeError as exc:
+        st.warning(str(exc))
+        return
+    pipeline.start_visual_run(run_id)
     pipeline.set_current_job(active["id"], job_url(job), run_id=run_id)
     st.rerun()
 

@@ -14,6 +14,11 @@ SETTINGS_SECTIONS: list[tuple[str, str, str]] = [
         "Local endpoint, model, clip limits, and fallback behavior.",
     ),
     (
+        "vlm",
+        "Visual analysis",
+        "Contact-sheet frame counts, tile sizing, and VLM limits.",
+    ),
+    (
         "whisper",
         "Whisper",
         "Model, revision, decoding threshold, and determinism.",
@@ -63,6 +68,15 @@ SETTINGS_FIELDS: dict[str, list[tuple[str, str, str, dict[str, Any]]]] = {
         ("api_key", "API key", "password", {}),
         ("api_key_file", "API key file", "text", {}),
         ("api_key_container", "API key container", "text", {}),
+    ],
+    "vlm": [
+        ("enabled", "Enable VLM analysis", "bool", {}),
+        ("frames_per_clip", "Frames per clip", "int", {"min_value": 1, "max_value": 16, "step": 1}),
+        ("tile_columns", "Contact-sheet columns", "int", {"min_value": 1, "max_value": 6, "step": 1}),
+        ("tile_width", "Tile width", "int", {"min_value": 200, "max_value": 1280, "step": 40}),
+        ("max_clips", "Maximum clips", "int", {"min_value": 1, "max_value": 24, "step": 1}),
+        ("timeout", "VLM timeout seconds", "float", {"min_value": 1.0, "step": 10.0}),
+        ("max_tokens", "VLM max tokens", "int", {"min_value": 1, "step": 64}),
     ],
     "whisper": [
         ("model", "Model", "text", {}),

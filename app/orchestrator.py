@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app import analytics, archive, jobs, stages, storage
+from app import analytics, archive, jobs, ranking, stages, storage
 
 ROOT = storage.ROOT
 APP_DIR = storage.APP_DIR
@@ -197,7 +197,10 @@ def history_detail(run_id: str) -> dict[str, Any] | None:
                 pass
     record["previews"] = previews
     record["activity"] = activity(10, archive_dir)
-    record["targeted"] = archive.targeted_detail(run_id)
+    record["targeted"] = archive.targeted_extract_detail(run_id)
+    record["selection"] = archive.selection_detail(run_id)
+    record["visual"] = archive.visual_detail(run_id)
+    record["rankings"] = ranking.build_rankings(record.get("selection"), record.get("visual"))
     return record
 
 

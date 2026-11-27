@@ -19,7 +19,15 @@ fi
 OUT="$ROOT/3-select/output/$RUN_ID"
 mkdir -p "$OUT"
 
-exec "$ROOT/.venv/bin/python" "$ROOT/app/targeted.py" \
+USE_LLM=1
+for arg in "$@"; do
+    [[ "$arg" == "--no-llm" ]] && USE_LLM=0
+done
+if [[ "$USE_LLM" == "1" ]]; then
+    "$ROOT/.venv/bin/python" "$ROOT/app/qwen_server.py" ensure || echo "[select] Qwen unavailable; using fallback"
+fi
+
+exec "$ROOT/.venv/bin/python" "$ROOT/app/selection.py" \
     --run-id "$RUN_ID" \
     --out "$OUT" \
     --persist \

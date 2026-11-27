@@ -67,30 +67,74 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 1
 
 
-def cmd_targeted(args: argparse.Namespace) -> int:
-    """Run targeted clip selection for an archived run."""
+def cmd_extract(args: argparse.Namespace) -> int:
+    """Run YAMNet-targeted transcript extraction for an archived run."""
     run_id = args.run_id or storage.resolve_run_id()
     if not run_id:
-        print("Error: run_id required for targeted selection.", file=sys.stderr)
+        print("Error: run_id required for targeted extraction.", file=sys.stderr)
         return 2
 
     extra = []
-    if args.no_llm:
-        extra.append("--no-llm")
     if args.rescan:
         extra.append("--rescan")
     if args.limit:
         extra.extend(["--limit", str(args.limit)])
 
-    print(f"Running targeted selection for run_id={run_id}...")
+    print(f"Running targeted extraction for run_id={run_id}...")
     try:
-        res = archive.run_targeted_archive(run_id, extra_args=extra)
+        res = archive.run_targeted_extract(run_id, extra_args=extra)
         if res:
-            selections = res.get("selections", [])
-            print(f"Targeted selection complete. Found {len(selections)} clip(s).")
+            summary = res.get("summary") or {}
+            print(f"Extraction complete. {summary.get('candidates', 0)} candidate(s).")
         return 0
     except Exception as exc:
-        print(f"Error running targeted selection: {exc}", file=sys.stderr)
+        print(f"Error running targeted extraction: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_select(args: argparse.Namespace) -> int:
+    """Run Qwen selection over extracted targeted transcripts."""
+    run_id = args.run_id or storage.resolve_run_id()
+    if not run_id:
+        print("Error: run_id required for Qwen selection.", file=sys.stderr)
+        return 2
+
+    extra = []
+    if args.no_llm:
+        extra.append("--no-llm")
+
+    print(f"Running Qwen selection for run_id={run_id}...")
+    try:
+        res = archive.run_selection(run_id, extra_args=extra)
+        if res:
+            selections = res.get("selections", [])
+            print(f"Selection complete. Found {len(selections)} clip(s).")
+        return 0
+    except Exception as exc:
+        print(f"Error running Qwen selection: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_visual(args: argparse.Namespace) -> int:
+    """Run VLM contact-sheet analysis over selected clips."""
+    run_id = args.run_id or storage.resolve_run_id()
+    if not run_id:
+        print("Error: run_id required for visual analysis.", file=sys.stderr)
+        return 2
+    extra = []
+    if args.no_vlm:
+        extra.append("--no-vlm")
+    if args.max_clips:
+        extra.extend(["--max-clips", str(args.max_clips)])
+    print(f"Running visual analysis for run_id={run_id}...")
+    try:
+        res = archive.run_visual(run_id, extra_args=extra)
+        if res:
+            summary = res.get("summary") or {}
+            print(f"Visual analysis complete. {summary.get('clips', 0)} clip(s).")
+        return 0
+    except Exception as exc:
+        print(f"Error running visual analysis: {exc}", file=sys.stderr)
         return 1
 
 
@@ -126,20 +170,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     # run command
     p_run = sub.add_parser("run", help="Run a stage or full pipeline")
-    p_run.add_argument("stage", choices=["pipeline", "all", "1-ingest", "2-transcribe", "3-select"])
+    p_run.add_argument("stage", choices=["pipeline", "all", "1-ingest", "2-transcribe"])
     p_run.add_argument("--target", "-t", help="Target URL or local media filepath")
     p_run.add_argument("--run-id", "-r", help="Run ID for stage execution")
     p_run.set_defaults(func=cmd_run)
 
-    # targeted command
-    p_target = sub.add_parser("targeted", help="Execute targeted selection")
-    p_target.add_argument("run_id", nargs="?", help="Run ID to process")
-    p_target.add_argument("--no-llm", action="store_true", help="Disable LLM clip selection")
-    p_target.add_argument(
+    # extraction command
+    p_extract = sub.add_parser("extract", help="Extract YAMNet-targeted transcripts")
+    p_extract.add_argument("run_id", nargs="?", help="Run ID to process")
+    p_extract.add_argument(
         "--rescan", action="store_true", help="Force re-running YAMNet audio tagger"
     )
-    p_target.add_argument("--limit", type=int, default=0, help="Limit number of candidate clips")
-    p_target.set_defaults(func=cmd_targeted)
+    p_extract.add_argument("--limit", type=int, default=0, help="Limit number of candidate clips")
+    p_extract.set_defaults(func=cmd_extract)
+
+    # selection command
+    p_select = sub.add_parser("select", help="Run Qwen selection over extracted transcripts")
+    p_select.add_argument("run_id", nargs="?", help="Run ID to process")
+    p_select.add_argument("--no-llm", action="store_true", help="Disable LLM clip selection")
+    p_select.set_defaults(func=cmd_select)
+
+    # visual command
+    p_visual = sub.add_parser("visual", help="Analyze selected-clip contact sheets with VLM")
+    p_visual.add_argument("run_id", nargs="?", help="Run ID to process")
+    p_visual.add_argument("--no-vlm", action="store_true", help="Create sheets without VLM")
+    p_visual.add_argument("--max-clips", type=int, default=0, help="Limit clips to analyze")
+    p_visual.set_defaults(func=cmd_visual)
 
     # handoff command
     p_handoff = sub.add_parser("handoff", help="Handoff files between stages")

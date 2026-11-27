@@ -49,7 +49,8 @@ else
     YTDLP_ARGS=(
         --no-playlist
         --no-warnings
-        --format "bestaudio/best"
+        --format "bv*[height<=720]+ba/b[height<=720]/bestaudio/best"
+        --merge-output-format mp4
         --write-info-json
         --output "$INCOMING/source.%(ext)s"
     )
@@ -89,14 +90,22 @@ fi
 
 JOB_OUT="$OUT/$RUN_ID"
 AUDIO_DIR="$JOB_OUT/audio"
+VIDEO_DIR="$JOB_OUT/video"
 TRANS_JOB="$TRANS_INPUT/$RUN_ID"
 HANDOFF="$TRANS_JOB/audio16k_full.wav"
 INFO_FILE=""
-mkdir -p "$AUDIO_DIR" "$TRANS_JOB"
-rm -f "$AUDIO_DIR"/source.* "$JOB_OUT/ingest.json" "$JOB_OUT/source.info.json"
+VIDEO_REL=""
+mkdir -p "$AUDIO_DIR" "$VIDEO_DIR" "$TRANS_JOB"
+rm -f "$AUDIO_DIR"/source.* "$VIDEO_DIR"/source.* "$JOB_OUT/ingest.json" "$JOB_OUT/source.info.json"
 
 EXT="${SOURCE_TMP##*.}"
-SRC="$AUDIO_DIR/source.$EXT"
+has_video="$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$SOURCE_TMP" | head -n 1)"
+if [[ -n "$has_video" ]]; then
+    SRC="$VIDEO_DIR/source.$EXT"
+    VIDEO_REL="video/source.$EXT"
+else
+    SRC="$AUDIO_DIR/source.$EXT"
+fi
 mv -f "$SOURCE_TMP" "$SRC"
 if [[ -n "$INFO_TMP" ]]; then
     INFO_FILE="$JOB_OUT/source.info.json"
@@ -120,7 +129,7 @@ mv -f "$HANDOFF.tmp" "$HANDOFF"
 
 "$PY" - "$URL" "$SRC" "$AUDIO_DIR/audio16k_full.wav" "$HANDOFF" \
     "$sample_rate" "$channels" "$codec" "$duration" "$JOB_OUT/ingest.json" "$INFO_FILE" \
-    "$RUN_ID" "$CREATED_AT" <<'PY'
+    "$RUN_ID" "$CREATED_AT" "$VIDEO_REL" <<'PY'
 import json
 import sys
 
@@ -137,12 +146,14 @@ import sys
     info_file,
     run_id,
     created_at,
-) = sys.argv[1:13]
+    video_rel,
+) = sys.argv[1:14]
 payload = {
     "run_id": run_id,
     "source_url": url,
     "source_file": src,
     "audio_16k": "audio/audio16k_full.wav",
+    "video_file": video_rel,
     "transcribe_input": f"2-transcribe/input/{run_id}/audio16k_full.wav",
     "sample_rate": int(rate),
     "channels": int(channels),
@@ -169,6 +180,9 @@ rm -rf "$INCOMING"
 printf '%s' "$RUN_ID" > "$OUT/current_run_id"
 printf '[ingest] run_id: %s\n' "$RUN_ID"
 printf '[ingest] source: %s\n' "$SRC"
+if [[ -n "$VIDEO_REL" ]]; then
+    printf '[ingest] video: %s\n' "$SRC"
+fi
 printf '[ingest] normalized: %s (%s Hz, %s ch, %ss)\n' \
     "$AUDIO_DIR/audio16k_full.wav" "$sample_rate" "$channels" "$duration"
 printf '[ingest] 2-transcribe input: %s\n' "$HANDOFF"

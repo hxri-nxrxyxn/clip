@@ -183,9 +183,13 @@ def current_run_id():
 def ingest_for_run(run_id=None):
     resolved = resolve_run_id(run_id)
     if resolved:
-        data = read_json_path(stage_output_dir("1-ingest", resolved) / "ingest.json")
-        if data:
-            return data
+        for path in (
+            stage_output_dir("1-ingest", resolved) / "ingest.json",
+            HISTORY_DIR / resolved / "ingest.json",
+        ):
+            data = read_json_path(path)
+            if data:
+                return data
     return read_json("1-ingest/output/ingest.json") or {}
 
 
@@ -335,6 +339,31 @@ def archive_current_run(run_id=None):
             }
         )
         break
+    video_name = None
+    for video_dir in (
+        stage_output_dir("1-ingest", run_id) / "video",
+        ROOT / "1-ingest" / "output" / "video",
+    ):
+        if not video_dir.is_dir():
+            continue
+        for source in sorted(video_dir.glob("source.*")):
+            if not source.is_file():
+                continue
+            target = temporary / "video" / source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            video_name = f"video/{source.name}"
+            files.append(
+                {
+                    "name": video_name,
+                    "source": source.relative_to(ROOT).as_posix(),
+                    "size": target.stat().st_size,
+                    "mtime": now_iso(target.stat().st_mtime),
+                }
+            )
+            break
+        if video_name:
+            break
     record = {
         "run_id": run_id,
         "video": video_from_ingest(ingest),
@@ -342,6 +371,7 @@ def archive_current_run(run_id=None):
         "summary": transcribe_summary_from_path(transcribe_dir) if transcribe_dir.is_dir() else {},
         "files": files,
         "audio": audio_name,
+        "video_file": video_name,
         "archived_at": now_iso(),
         "updated_at": now_iso(),
     }

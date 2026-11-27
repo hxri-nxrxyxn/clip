@@ -41,7 +41,7 @@ STAGES = {
     "2-transcribe": {
         "number": 2,
         "title": "Transcribe",
-        "description": "Run Whisper, trim the outro, tag audio with YAMNet, and write timestamped and tagged transcripts.",
+        "description": "Run Whisper, trim the outro, tag audio with YAMNet, and write timestamped, tagged, and targeted transcripts.",
         "command": ["bash", "2-transcribe/scripts/run.sh"],
         "url": False,
         "required": ["2-transcribe/input/{run_id}/audio16k_full.wav"],
@@ -74,7 +74,7 @@ STAGES = {
     "3-select": {
         "number": 3,
         "title": "Select",
-        "description": "Run YAMNet-guided targeted Whisper and Qwen clip selection.",
+        "description": "Use Qwen to select clips and optionally review contact sheets with the VLM.",
         "command": ["bash", "3-select/scripts/run.sh"],
         "url": False,
         "required": [],
